@@ -20,6 +20,19 @@ const paymentMethodSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    image: {
+      type: [String],
+      required: true,
+      validate: {
+        validator: function (array) {
+          return array.length > 0;
+        },
+        message: "At least one image is required",
+      },
+    },
+    imagePublicId: {
+      type: [String],
+    },
   },
   { timestamps: true }
 );

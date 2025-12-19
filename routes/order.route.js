@@ -13,6 +13,8 @@ import {
   getOrdersByOrderStatus,
   updateOrderStatus,
   updateOrderPlaceType,
+  refundOrder,
+  cancelOrder,
 } from "../controllers/order.controller.js";
 
 const router = express.Router();
@@ -34,6 +36,10 @@ router.post( "/create-order-products-multiple/:addressId", createOrderForMultipl
 router.patch( "/update-order-status/:orderId", checkAdminRole, updateOrderStatus );
 
 router.patch("/place-type/:orderId", checkAdminRole, updateOrderPlaceType);
+
+router.post("/refund/:orderId", checkAdminRole , refundOrder);
+
+router.post("/cancel/:orderId", checkAdminRole , cancelOrder);
 
 
 export { router };

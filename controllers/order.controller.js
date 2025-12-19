@@ -1,15 +1,20 @@
 import Cart from "../models/cart.model.js";
 import Order from "../models/order.model.js";
 import Product from "../models/product.model.js";
+import Reservation from "../models/reservation.model.js";
+import StripeConfig from "../models/stripConfig.model.js";
 import Stripe from "stripe";
 import "dotenv/config";
-import Reservation from "../models/reservation.model.js";
 import {
   validateInPlaceOrder,
   createReservationForOrder,
   createReservationDate,
 } from "../helpers/reservation.helpers.js";
-import { validatePaymentMethod } from "../helpers/payment.helpers.js";
+import {
+  calculateDeliveryFee,
+  validatePaymentMethod,
+  validateOrderAmount
+} from "../helpers/payment.helpers.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const currency = "usd";
@@ -28,6 +33,8 @@ export const createOrderForCart = async (req, res) => {
       slot,
       date,
       paymentMethod = "Card",
+      governorate,
+      city,
     } = req.body;
 
     if (!userId)
@@ -40,6 +47,14 @@ export const createOrderForCart = async (req, res) => {
         success: false,
         message: "Cart ID and Address ID are required",
       });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
 
     if (placeType === "In-Place" && !tableId)
       return res.status(400).json({
@@ -88,6 +103,35 @@ export const createOrderForCart = async (req, res) => {
     if (!cart.products.length)
       return res.status(400).json({ success: false, message: "Cart is empty" });
 
+    // Calculate delivery fee
+    const subtotal = cart.totalPrice;
+    let deliveryFee = 0;
+
+    try {
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
     // Create Order
     const order = await Order.create({
       buyer: userId,
@@ -95,7 +139,9 @@ export const createOrderForCart = async (req, res) => {
         product: item.product._id,
         quantity: item.quantity,
       })),
-      totalPrice: cart.totalPrice,
+      subtotal,
+      deliveryFee,
+      totalPrice,
       totalQuantity: cart.totalQuantity,
       paymentStatus: "Pending",
       paymentMethod,
@@ -103,6 +149,8 @@ export const createOrderForCart = async (req, res) => {
       address: addressId,
       placeType,
       table: tableId || null,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
     });
 
     // ✅ Create reservation for in-place orders
@@ -129,6 +177,22 @@ export const createOrderForCart = async (req, res) => {
         quantity: item.quantity,
       }));
 
+       // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
         line_items,
@@ -175,7 +239,8 @@ export const createOrderForCart = async (req, res) => {
   }
 };
 
-// ------------------ CREATE ORDER FOR SINGLE PRODUCT ------------------
+
+// ==================== CREATE ORDER FOR SINGLE PRODUCT ====================
 export const createOrderForProduct = async (req, res) => {
   const FRONTEND_URL =
     process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
@@ -190,6 +255,8 @@ export const createOrderForProduct = async (req, res) => {
       date,
       quantity = 1,
       paymentMethod = "Card",
+      governorate,
+      city,
     } = req.body;
 
     if (!userId)
@@ -202,6 +269,14 @@ export const createOrderForProduct = async (req, res) => {
         success: false,
         message: "Product ID and Address ID are required",
       });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
 
     if (placeType === "In-Place" && !tableId)
       return res.status(400).json({
@@ -230,7 +305,7 @@ export const createOrderForProduct = async (req, res) => {
       });
     }
 
-    // ✅ Validate in-place order using helper
+    // Validate in-place order
     let reservationDate;
     if (placeType === "In-Place") {
       const validation = await validateInPlaceOrder(tableId, slot, date);
@@ -255,10 +330,36 @@ export const createOrderForProduct = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Product not found" });
 
+    // Calculate delivery fee
+    const subtotal = product.price * quantity;
+    let deliveryFee = 0;
+    
+    try {
+      deliveryFee = await calculateDeliveryFee(placeType, governorate, city, subtotal);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
     const order = await Order.create({
       buyer: userId,
       products: [{ product: productId, quantity }],
-      totalPrice: product.price * quantity,
+      subtotal,
+      deliveryFee,
+      totalPrice,
       totalQuantity: quantity,
       paymentStatus: "Pending",
       paymentMethod,
@@ -266,9 +367,10 @@ export const createOrderForProduct = async (req, res) => {
       address: addressId,
       placeType,
       table: tableId || null,
+      deliveryLocation: placeType === "Online" ? { governorate, city } : undefined,
     });
 
-    // ✅ Create reservation for in-place orders
+    // Create reservation for in-place orders
     if (placeType === "In-Place") {
       await createReservationForOrder(
         userId,
@@ -289,6 +391,21 @@ export const createOrderForProduct = async (req, res) => {
           quantity,
         },
       ];
+
+      // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
@@ -335,7 +452,7 @@ export const createOrderForProduct = async (req, res) => {
   }
 };
 
-// ------------------ CREATE ORDER FOR MULTIPLE PRODUCTS ------------------
+// ==================== CREATE ORDER FOR MULTIPLE PRODUCTS ====================
 export const createOrderForMultipleProducts = async (req, res) => {
   const FRONTEND_URL =
     process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
@@ -350,6 +467,8 @@ export const createOrderForMultipleProducts = async (req, res) => {
       slot,
       date,
       paymentMethod = "Card",
+      governorate,
+      city,
     } = req.body;
 
     if (!userId)
@@ -361,6 +480,14 @@ export const createOrderForMultipleProducts = async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "Products array is required" });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
 
     if (placeType !== "In-Place" && (tableId || date || slot)) {
       return res.status(400).json({
@@ -395,7 +522,7 @@ export const createOrderForMultipleProducts = async (req, res) => {
       });
     }
 
-    // ✅ Validate in-place order using helper
+    // Validate in-place order
     let reservationDate;
     if (placeType === "In-Place") {
       const validation = await validateInPlaceOrder(tableId, slot, date);
@@ -408,22 +535,47 @@ export const createOrderForMultipleProducts = async (req, res) => {
       reservationDate = validation.reservationDate;
     }
 
-    let totalPrice = 0;
+    let subtotal = 0;
     let totalQuantity = 0;
 
     const enrichedProducts = await Promise.all(
       products.map(async (item) => {
         const product = await Product.findById(item.productId);
         if (!product) throw new Error(`Product not found: ${item.productId}`);
-        totalPrice += product.price * item.quantity;
+        subtotal += product.price * item.quantity;
         totalQuantity += item.quantity;
         return { product: product._id, quantity: item.quantity };
       })
     );
 
+    // Calculate delivery fee
+    let deliveryFee = 0;
+    
+    try {
+      deliveryFee = await calculateDeliveryFee(placeType, governorate, city, subtotal);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
     const order = await Order.create({
       buyer: userId,
       products: enrichedProducts,
+      subtotal,
+      deliveryFee,
       totalPrice,
       totalQuantity,
       paymentStatus: "Pending",
@@ -432,9 +584,10 @@ export const createOrderForMultipleProducts = async (req, res) => {
       address: addressId,
       placeType,
       table: tableId || null,
+      deliveryLocation: placeType === "Online" ? { governorate, city } : undefined,
     });
 
-    // ✅ Create reservation for in-place orders
+    // Create reservation for in-place orders
     if (placeType === "In-Place") {
       await createReservationForOrder(
         userId,
@@ -461,6 +614,21 @@ export const createOrderForMultipleProducts = async (req, res) => {
           };
         })
       );
+
+      // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
@@ -503,7 +671,7 @@ export const createOrderForMultipleProducts = async (req, res) => {
   }
 };
 
-// ------------------ GET ORDER DETAILS ------------------
+// ==================== GET ORDER DETAILS ====================
 export const getOrderDetails = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -527,7 +695,7 @@ export const getOrderDetails = async (req, res) => {
   }
 };
 
-// ------------------ GET ALL ORDERS FOR USER ------------------
+// ==================== GET ALL ORDERS FOR USER ====================
 export const getAllOrdersForUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -568,7 +736,7 @@ export const getAllOrdersForUser = async (req, res) => {
   }
 };
 
-// ------------------ GET CURRENT USER ORDERS ------------------
+// ==================== GET CURRENT USER ORDERS ====================
 export const getCurrentUserOrders = async (req, res) => {
   try {
     const userId = req.user?._id;
@@ -609,7 +777,7 @@ export const getCurrentUserOrders = async (req, res) => {
   }
 };
 
-// ------------------ GET ALL ORDERS (ADMIN) ------------------
+// ==================== GET ALL ORDERS (ADMIN) ====================
 export const getAllOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, orderStatus } = req.query;
@@ -650,7 +818,7 @@ export const getAllOrders = async (req, res) => {
   }
 };
 
-// ------------------ UPDATE ORDER STATUS ------------------
+// ==================== UPDATE ORDER STATUS ====================
 export const updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -861,5 +1029,240 @@ export const updateOrderPlaceType = async (req, res) => {
   } catch (error) {
     console.error("Error in updateOrderPlaceType:", error);
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== REFUND ORDER ====================
+export const refundOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { refundAmount, refundReason } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.paymentStatus !== "Completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only completed payments can be refunded",
+      });
+    }
+
+    if (order.paymentMethod !== "Card") {
+      return res.status(400).json({
+        success: false,
+        message: "Refunds are only available for card payments",
+      });
+    }
+
+    // Get Stripe config
+    const config = await StripeConfig.findOne({ isActive: true });
+    
+    // Check refund window
+    if (config && config.refundWindowHours > 0) {
+      const orderDate = new Date(order.createdAt);
+      const now = new Date();
+      const hoursSinceOrder = (now - orderDate) / (1000 * 60 * 60);
+      
+      if (hoursSinceOrder > config.refundWindowHours) {
+        return res.status(400).json({
+          success: false,
+          message: `Refund window of ${config.refundWindowHours} hours has expired`,
+        });
+      }
+    }
+
+    // Validate refund amount
+    let amountToRefund = order.totalPrice;
+    
+    if (refundAmount) {
+      if (!config || !config.allowPartialRefunds) {
+        return res.status(400).json({
+          success: false,
+          message: "Partial refunds are not allowed",
+        });
+      }
+      
+      if (refundAmount <= 0 || refundAmount > order.totalPrice) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid refund amount",
+        });
+      }
+      
+      amountToRefund = refundAmount;
+    }
+
+    // Get payment intent from session
+    const session = await stripe.checkout.sessions.retrieve(order.stripeSessionID);
+    const paymentIntentId = session.payment_intent;
+
+    if (!paymentIntentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment intent not found for this order",
+      });
+    }
+
+    // Create refund
+    const refund = await stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      amount: Math.round(amountToRefund * 100),
+      reason: refundReason || "requested_by_customer",
+    });
+
+    // Update order
+    const isPartialRefund = amountToRefund < order.totalPrice;
+    
+    order.paymentStatus = isPartialRefund ? "PartiallyRefunded" : "Refunded";
+    order.orderStatus = "Cancelled";
+    order.refundDetails = {
+      refundId: refund.id,
+      refundAmount: amountToRefund,
+      refundDate: new Date(),
+      refundReason: refundReason || "Customer requested refund",
+      refundStatus: refund.status === "succeeded" ? "Completed" : "Pending",
+    };
+    
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        order,
+        refund: {
+          id: refund.id,
+          amount: amountToRefund,
+          status: refund.status,
+        },
+      },
+      message: `${isPartialRefund ? "Partial refund" : "Full refund"} processed successfully`,
+    });
+  } catch (error) {
+    console.error("Error in refundOrder:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// ==================== CANCEL ORDER WITH AUTO REFUND ====================
+export const cancelOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { cancellationReason } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.orderStatus === "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Order is already cancelled",
+      });
+    }
+
+    const config = await StripeConfig.findOne({ isActive: true });
+    let refundMessage = "";
+
+    // Handle Card payments
+    if (order.paymentMethod === "Card" && order.stripeSessionID) {
+      
+      // Case 1: Payment is completed - issue refund
+      if (order.paymentStatus === "Completed") {
+        if (config?.autoRefundOnCancellation) {
+          try {
+            const session = await stripe.checkout.sessions.retrieve(order.stripeSessionID);
+            const paymentIntentId = session.payment_intent;
+
+            if (paymentIntentId) {
+              const refund = await stripe.refunds.create({
+                payment_intent: paymentIntentId,
+                reason: "requested_by_customer",
+              });
+
+              order.refundDetails = {
+                refundId: refund.id,
+                refundAmount: order.totalPrice,
+                refundDate: new Date(),
+                refundReason: cancellationReason || "Order cancelled",
+                refundStatus: refund.status === "succeeded" ? "Completed" : "Pending",
+              };
+              
+              order.paymentStatus = "Refunded";
+              refundMessage = " and refund initiated";
+            }
+          } catch (refundError) {
+            console.error("Auto-refund failed:", refundError);
+            refundMessage = " (refund failed - please process manually)";
+          }
+        }
+      } 
+      // Case 2: Payment is pending - expire the Stripe session
+      else if (order.paymentStatus === "Pending") {
+        try {
+          // Expire the checkout session to prevent future payment
+          await stripe.checkout.sessions.expire(order.stripeSessionID);
+          order.paymentStatus = "Failed";
+          refundMessage = " and payment session cancelled";
+        } catch (expireError) {
+          console.error("Failed to expire Stripe session:", expireError);
+          // Continue with cancellation even if session expiry fails
+        }
+      }
+    }
+    // COD orders - just cancel (no refund needed)
+    else if (order.paymentMethod === "COD") {
+      refundMessage = " (no payment to refund for COD)";
+    }
+
+    // Delete reservation if it's an In-Place order
+    if (order.placeType === "In-Place" && order.table) {
+      await Reservation.findOneAndDelete({
+        orderId: orderId,
+        table: order.table,
+      });
+    }
+
+    order.orderStatus = "Cancelled";
+    order.cancellationReason = cancellationReason || "Cancelled by user";
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      data: order,
+      message: `Order cancelled successfully${refundMessage}`,
+    });
+  } catch (error) {
+    console.error("Error in cancelOrder:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
