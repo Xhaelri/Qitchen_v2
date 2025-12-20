@@ -49,18 +49,15 @@ app.use("/api/v2/admin", adminRouter);
 app.use(notFound);
 app.use(errorHandler);
 
-async function startServer() {
-  const port = process.env.PORT || 4000;
-  try {
-    await connectDB();
+connectDB();
 
-    app.listen(port, () => {
-      console.log(`Server is running on http://localhost:${port}`);
-    });
-  } catch (error) {
-    console.error("Failed to connect to database:", error);
-    process.exit(1);
-  }
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  const port = process.env.PORT || 4000;
+  app.listen(port, () => {
+    console.log(`Server is running on http://localhost:${port}`);
+  });
 }
 
-startServer();
+// For Vercel
+export default app;
