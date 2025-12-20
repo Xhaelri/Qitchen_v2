@@ -6,75 +6,6 @@ import {
   destroyFromCloudinary,
 } from "../utils/cloudinary.js";
 
-// Create a new payment method
-export const createPaymentMethod = async (req, res) => {
-  try {
-    const { name, displayName, description, isActive } = req.body || {};
-
-    if (!name || !displayName) {
-      return res.status(400).json({
-        success: false,
-        message: "Name and displayName are required",
-      });
-    }
-
-    if (!["Card", "COD"].includes(name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment method name must be either 'Card' or 'COD'",
-      });
-    }
-
-    const existingMethod = await PaymentMethod.findOne({ name });
-    if (existingMethod) {
-      return res.status(409).json({
-        success: false,
-        message: `Payment method '${name}' already exists`,
-      });
-    }
-
-    let images = [];
-    let imagePublicIds = [];
-
-    if (req.files?.length) {
-      const uploadedImages = [];
-
-      for (const file of req.files) {
-        const result = await uploadOnCloudinary(
-          file.buffer,
-          file.originalname,
-          "payment-methods"
-        );
-
-        uploadedImages.push(result);
-      }
-
-      images = uploadedImages.map((img) => img.secure_url);
-      imagePublicIds = uploadedImages.map((img) => img.public_id);
-    }
-
-    const paymentMethod = await PaymentMethod.create({
-      name,
-      displayName,
-      description: description || "",
-      isActive: isActive !== undefined ? isActive === "true" : true,
-      image: images,
-      imagePublicId: imagePublicIds,
-    });
-
-    return res.status(201).json({
-      success: true,
-      data: paymentMethod,
-      message: "Payment method created successfully",
-    });
-  } catch (error) {
-    console.error("Error in createPaymentMethod:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
 
 // Get all payment methods
 export const getAllPaymentMethods = async (req, res) => {
@@ -116,11 +47,96 @@ export const getActivePaymentMethods = async (req, res) => {
   }
 };
 
-// Update payment method (can update displayName, description, and isActive)
+// Create a new payment method
+export const createPaymentMethod = async (req, res) => {
+  try {
+    const { name, displayName, description, isActive, provider } = req.body || {};
+
+    if (!name || !displayName) {
+      return res.status(400).json({
+        success: false,
+        message: "Name and displayName are required",
+      });
+    }
+
+    if (!provider) {
+      return res.status(400).json({
+        success: false,
+        message: "Provider is required (Stripe, Paymob, or Internal)",
+      });
+    }
+
+    if (!["Card", "COD", "Paymob-Card", "Paymob-Wallet"].includes(name)) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment method name must be 'Card', 'COD', 'Paymob-Card', or 'Paymob-Wallet'",
+      });
+    }
+
+    if (!["Stripe", "Paymob", "Internal"].includes(provider)) {
+      return res.status(400).json({
+        success: false,
+        message: "Provider must be 'Stripe', 'Paymob', or 'Internal'",
+      });
+    }
+
+    const existingMethod = await PaymentMethod.findOne({ name });
+    if (existingMethod) {
+      return res.status(409).json({
+        success: false,
+        message: `Payment method '${name}' already exists`,
+      });
+    }
+
+    let images = [];
+    let imagePublicIds = [];
+
+    if (req.files?.length) {
+      const uploadedImages = [];
+
+      for (const file of req.files) {
+        const result = await uploadOnCloudinary(
+          file.buffer,
+          file.originalname,
+          "payment-methods"
+        );
+
+        uploadedImages.push(result);
+      }
+
+      images = uploadedImages.map((img) => img.secure_url);
+      imagePublicIds = uploadedImages.map((img) => img.public_id);
+    }
+
+    const paymentMethod = await PaymentMethod.create({
+      name,
+      displayName,
+      description: description || "",
+      isActive: isActive !== undefined ? isActive === "true" : true,
+      provider,
+      image: images,
+      imagePublicId: imagePublicIds,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: paymentMethod,
+      message: "Payment method created successfully",
+    });
+  } catch (error) {
+    console.error("Error in createPaymentMethod:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Update payment method (can update displayName, description, provider, and isActive)
 export const updatePaymentMethod = async (req, res) => {
   try {
     const { paymentMethodId } = req.params;
-    const { displayName, description, isActive } = req.body || {};
+    const { displayName, description, isActive, provider } = req.body || {};
 
     const paymentMethod = await PaymentMethod.findById(paymentMethodId);
     if (!paymentMethod) {
@@ -133,6 +149,15 @@ export const updatePaymentMethod = async (req, res) => {
     if (displayName !== undefined) paymentMethod.displayName = displayName;
     if (description !== undefined) paymentMethod.description = description;
     if (isActive !== undefined) paymentMethod.isActive = isActive === "true";
+    if (provider !== undefined) {
+      if (!["Stripe", "Paymob", "Internal"].includes(provider)) {
+        return res.status(400).json({
+          success: false,
+          message: "Provider must be 'Stripe', 'Paymob', or 'Internal'",
+        });
+      }
+      paymentMethod.provider = provider;
+    }
 
     if (req.files?.length) {
       if (paymentMethod.imagePublicId?.length) {

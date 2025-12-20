@@ -47,8 +47,11 @@ export const registerUser = async (req, res) => {
       });
     }
 
+    // ✅ Convert email to lowercase to prevent case conflicts
+    const normalizedEmail = email.toLowerCase().trim();
+
     // ✅ Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -56,12 +59,10 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // ✅ Hash password
-
     // ✅ Create user (unverified at first)
     const user = new User({
       name,
-      email,
+      email: normalizedEmail, // Use normalized email
       password,
       phoneNumber,
       role,
@@ -78,11 +79,11 @@ export const registerUser = async (req, res) => {
     // ✅ Send verification email
     const mailOptions = {
       from: process.env.STMP_EMAIL,
-      to: email,
+      to: normalizedEmail, // Use normalized email
       subject: "Verify your Qitchen Account",
       html: EMAIL_VERIFY_TEMPLATE.replace("{{otp}}", otp).replace(
         "{{email}}",
-        email
+        normalizedEmail
       ),
     };
 
@@ -118,7 +119,10 @@ export const loginUser = async (req, res) => {
         .json({ success: false, message: "Email and password are required" });
     }
 
-    const user = await User.findOne({ email: email });
+    // ✅ Convert email to lowercase to match stored format
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res
         .status(401)
@@ -163,6 +167,97 @@ export const loginUser = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Also fix sendResetOtp to handle email normalization
+export const sendResetOtp = async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.json({
+      success: false,
+      message: "Email is required",
+    });
+  }
+
+  try {
+    // ✅ Convert email to lowercase
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return res.json({ success: false, message: "User not found" });
+    }
+
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+
+    user.resetOtp = otp;
+    user.resetOtpExpireAt = Date.now() + 15 * 60 * 1000;
+    user.resetOtpSendTime = Date.now();
+
+    await user.save();
+
+    const mailOptions = {
+      from: process.env.STMP_EMAIL,
+      to: user.email,
+      subject: "Password Reset OTP",
+      html: PASSWORD_RESET_TEMPLATE.replace("{{otp}}", otp).replace(
+        "{{email}}",
+        user.email
+      ),
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    return res.json({ success: true, message: "OTP sent to your email" });
+  } catch (error) {
+    return res.json({ success: false, message: error.message });
+  }
+};
+
+// Fix resetPassword to handle email normalization
+export const resetPassword = async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.json({
+      success: false,
+      message: "Email, OTP, and New Password are required",
+    });
+  }
+
+  try {
+    // ✅ Convert email to lowercase
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return res.json({ success: false, message: "User Not Found" });
+    }
+
+    if (user.resetOtp === "" || user.resetOtp !== otp) {
+      return res.json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (user.resetOtpExpireAt < Date.now()) {
+      return res.json({ success: false, message: "OTP Expired" });
+    }
+
+    user.password = newPassword;
+    user.resetOtp = "";
+    user.resetOtpExpireAt = 0;
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: "Password has been reset successfully",
+    });
+  } catch (error) {
+    return res.json({ success: false, message: error.message });
   }
 };
 
@@ -251,91 +346,9 @@ export const isAuthenticated = async (req, res) => {
   }
 };
 
-// Send Password Reset OTP
-export const sendResetOtp = async (req, res) => {
-  const { email } = req.body;
 
-  if (!email) {
-    return res.json({
-      success: false,
-      message: "Email is required",
-    });
-  }
 
-  try {
-    const user = await User.findOne({ email });
 
-    if (!user) {
-      return res.json({ success: false, message: "User not found" });
-    }
-
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-
-    user.resetOtp = otp;
-    user.resetOtpExpireAt = Date.now() + 15 * 60 * 1000;
-    user.resetOtpSendTime = Date.now()
-
-    await user.save();
-
-    const mailOptions = {
-      from: process.env.STMP_EMAIL,
-      to: user.email,
-      subject: "Password Reset OTP",
-      // text: `Your OTP for resetting your password is ${otp}. Use this OTP to proceed with resetting your password.`,
-      html: PASSWORD_RESET_TEMPLATE.replace("{{otp}}", otp).replace(
-        "{{email}}",
-        user.email
-      ),
-    };
-
-    await transporter.sendMail(mailOptions);
-
-    return res.json({ success: true, message: "OTP sent to your email" });
-  } catch (error) {
-    return res.json({ success: false, message: error.message });
-  }
-};
-
-// Reset User Password
-export const resetPassword = async (req, res) => {
-  const { email, otp, newPassword } = req.body;
-
-  if (!email || !otp || !newPassword) {
-    return res.json({
-      success: false,
-      message: "Email, OTP, and New Password are required",
-    });
-  }
-
-  try {
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.json({ success: false, message: "User Not Found" });
-    }
-
-    if (user.resetOtp === "" || user.resetOtp !== otp) {
-      return res.json({ success: false, message: "Invalid OTP" });
-    }
-
-    if (user.resetOtpExpireAt < Date.now()) {
-      return res.json({ success: false, message: "OTP Expired" });
-    }
-
-    user.password = newPassword;
-    user.resetOtp = "";
-    user.resetOtpExpireAt = 0;
-
-    await user.save();
-
-    return res.json({
-      success: true,
-      message: "Password has been reset successfully",
-    });
-  } catch (error) {
-    return res.json({ success: false, message: error.message });
-  }
-};
 
 export const getCurrentUser = async (req, res) => {
   try {

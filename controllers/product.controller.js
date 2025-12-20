@@ -179,16 +179,19 @@ export const toggleProductAvailability = async (req, res) => {
 export const getProductById = async (req, res) => {
   try {
     const { productId } = req.params;
+
     if (!productId) {
-      res
-        .status(404)
+      return res
+        .status(400)
         .json({ success: false, message: "Product id is required" });
     }
+
     const product = await Product.findById(productId).select(
       "-imagesPublicId -review"
     );
+
     if (!product) {
-      res
+      return res
         .status(404)
         .json({ success: false, message: "Product doesn't exist" });
     }
@@ -196,13 +199,17 @@ export const getProductById = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: product,
-      message: "Product Fetched successfully",
+      message: "Product fetched successfully",
     });
+
   } catch (error) {
-    console.log("Error in getProductById function", error);
-    return res.status(404).json({ success: false, message: error.message });
+    console.error("Error in getProductById function", error);
+    return res
+      .status(500)
+      .json({ success: false, message: error.message });
   }
 };
+
 
 export const updateListedProduct = async (req, res) => {
   try {

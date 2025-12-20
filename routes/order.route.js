@@ -15,6 +15,7 @@ import {
   updateOrderPlaceType,
   refundOrder,
   cancelOrder,
+  createOrderForCartWithPaymob,
 } from "../controllers/order.controller.js";
 
 const router = express.Router();
@@ -28,6 +29,8 @@ router.get("/get-all-orders-for-user/:userId", getAllOrdersForUser);
 router.get("/:orderId", getOrderDetails);
 
 router.post("/create-order-cart/:cartId/:addressId", createOrderForCart);
+
+router.post("/create-order-cart-paymob/:cartId/:addressId", createOrderForCartWithPaymob);
 
 router.post( "/create-order-product/:productId/:addressId", createOrderForProduct );
 

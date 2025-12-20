@@ -16,7 +16,7 @@ const userSchema = new mongoose.Schema(
           "Username must be at least 8 characters long and can only contain letters, spaces, underscores (_), and hyphens (-).",
       },
     },
-        addresses: [
+    addresses: [
       {
         type: Schema.Types.ObjectId,
         ref: "Address",
@@ -26,6 +26,8 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      lowercase: true, // ✅ Automatically converts to lowercase
+      trim: true, // ✅ Automatically trims whitespace
       validate: {
         validator: function (v) {
           return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -64,7 +66,7 @@ const userSchema = new mongoose.Schema(
     resetOtpExpireAt: { type: Number, default: 0 },
     resetOtpSendTime: { type: Number, default: 0 },
   },
-  { minimize: false }
+  { minimize: false, timestamps: true } // ✅ Added timestamps for better tracking
 );
 
 userSchema.pre("save", async function (next) {
@@ -103,6 +105,7 @@ userSchema.methods.generateAccessToken = function () {
     }
   );
 };
+
 userSchema.methods.generateRefreshToken = function () {
   return jwt.sign(
     {

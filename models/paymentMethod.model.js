@@ -4,9 +4,15 @@ const paymentMethodSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      enum: ["Card", "COD"],
+      enum: ["Card", "COD", "Paymob-Card", "Paymob-Wallet"],
       required: true,
       unique: true,
+    },
+    // ✅ NEW: Provider information
+    provider: {
+      type: String,
+      enum: ["Stripe", "Paymob", "Internal"],
+      required: true,
     },
     isActive: {
       type: Boolean,

@@ -3,6 +3,7 @@ import PaymentMethod from "../models/paymentMethod.model.js";
 import StripeConfig from "../models/stripConfig.model.js";
 
 // Helper function for validation (used in order controller)
+
 export const validatePaymentMethod = async (paymentMethodName) => {
   try {
     const paymentMethod = await PaymentMethod.findOne({
@@ -31,7 +32,17 @@ export const validatePaymentMethod = async (paymentMethodName) => {
   }
 };
 
+// ✅ NEW: Check if payment method requires external gateway
+export const isExternalPaymentGateway = (paymentMethod) => {
+  return ["Card", "Paymob-Card", "Paymob-Wallet"].includes(paymentMethod);
+};
 
+// ✅ NEW: Get payment gateway type
+export const getPaymentGateway = (paymentMethod) => {
+  if (paymentMethod === "Card") return "Stripe";
+  if (paymentMethod.startsWith("Paymob-")) return "Paymob";
+  return "Internal";
+};
 // ==================== HELPER FUNCTIONS ====================
 
 // Helper function to calculate delivery fee
@@ -87,3 +98,11 @@ export const validateOrderAmount = async (totalPrice) => {
   
   return { success: true };
 };
+
+export async function getPaymentMethodId(paymentMethodName) {
+  const paymentMethod = await PaymentMethod.findOne({ name: paymentMethodName });
+  if (!paymentMethod) {
+    throw new Error(`Payment method '${paymentMethodName}' not found`);
+  }
+  return paymentMethod._id;
+}

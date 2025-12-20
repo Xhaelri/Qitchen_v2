@@ -57,14 +57,21 @@ const orderSchema = new mongoose.Schema(
       default: 1,
     },
     paymentMethod: {
-      type: String,
-      enum: ["Card", "COD"],
-      default: "Card",
+      type: Schema.Types.ObjectId,
+      ref: "PaymentMethod",
+      required: true,
     },
     // ✅ UPDATED: Added "Refunded" and "PartiallyRefunded" statuses
     paymentStatus: {
       type: String,
-      enum: ["Pending", "Completed", "Failed", "Cancelled", "Refunded", "PartiallyRefunded"],
+      enum: [
+        "Pending",
+        "Completed",
+        "Failed",
+        "Cancelled",
+        "Refunded",
+        "PartiallyRefunded",
+      ],
       default: "Pending",
       required: true,
     },
@@ -81,13 +88,13 @@ const orderSchema = new mongoose.Schema(
     deliveryLocation: {
       governorate: {
         type: String,
-        required: function() {
+        required: function () {
           return this.placeType === "Online";
         },
       },
       city: {
         type: String,
-        required: function() {
+        required: function () {
           return this.placeType === "Online";
         },
       },
@@ -115,7 +122,15 @@ const orderSchema = new mongoose.Schema(
     // ✅ UPDATED: Added "Cancelled" status
     orderStatus: {
       type: String,
-      enum: ["Processing", "Paid", "Ready", "On the way", "Received", "Failed", "Cancelled"],
+      enum: [
+        "Processing",
+        "Paid",
+        "Ready",
+        "On the way",
+        "Received",
+        "Failed",
+        "Cancelled",
+      ],
       default: "Processing",
       required: true,
     },
@@ -137,6 +152,37 @@ const orderSchema = new mongoose.Schema(
         type: String,
         enum: ["Pending", "Completed", "Failed"],
       },
+    },
+    // ✅ NEW: Cancellation tracking
+    cancellationReason: {
+      type: String,
+    },
+    // ✅ NEW: Paymob fields
+    paymobData: {
+      type: Schema.Types.Mixed,
+      default: null,
+    },
+    paymobPaymentId: {
+      type: String,
+      sparse: true,
+    },
+    paymobIntentionId: {
+      type: String,
+      sparse: true,
+    },
+
+    // ✅ NEW: Unique payment identifier for tracking
+    uniquePaymentId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    // QR Code for order verification
+    qrCodeData: {
+      type: String,
+    },
+    qrCodeImage: {
+      type: String,
     },
   },
   { timestamps: true }

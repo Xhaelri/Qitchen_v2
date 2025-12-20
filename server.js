@@ -17,9 +17,13 @@ import { router as reservationRouter } from "./routes/reservation.route.js";
 import { router as srtipeRouter } from "./routes/stripe.route.js";
 import { router as homeRouter } from "./routes/home.route.js";
 import { router as adminRouter } from "./routes/admin.route.js";
-import { router as deliveryRouter } from "./routes/delivery.route.js";
+import { router as paymobRouter } from "./routes/paymob.route.js";
+
 const app = express();
 
+
+// Paymob webhook route
+app.use("/api/v2/paymob", paymobRouter);
 // stripe webhook route
 app.use("/api/v2/stripe", srtipeRouter);
 
@@ -41,7 +45,6 @@ app.use("/api/v2/table", tableRouter);
 app.use("/api/v2/reservation", reservationRouter);
 app.use("/api/v2/home", homeRouter);
 app.use("/api/v2/admin", adminRouter);
-app.use("/api/v2/delivery", deliveryRouter);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -2,6 +2,8 @@ import Cart from "../models/cart.model.js";
 import Order from "../models/order.model.js";
 import Product from "../models/product.model.js";
 import Reservation from "../models/reservation.model.js";
+import PaymobService from "../services/paymob.service.js";
+
 import StripeConfig from "../models/stripConfig.model.js";
 import Stripe from "stripe";
 import "dotenv/config";
@@ -13,7 +15,8 @@ import {
 import {
   calculateDeliveryFee,
   validatePaymentMethod,
-  validateOrderAmount
+  validateOrderAmount,
+  getPaymentMethodId,
 } from "../helpers/payment.helpers.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -82,6 +85,18 @@ export const createOrderForCart = async (req, res) => {
         message: paymentValidation.message,
       });
     }
+
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     // ✅ Validate in-place order using helper
     let reservationDate;
     if (placeType === "In-Place") {
@@ -144,7 +159,7 @@ export const createOrderForCart = async (req, res) => {
       totalPrice,
       totalQuantity: cart.totalQuantity,
       paymentStatus: "Pending",
-      paymentMethod,
+      paymentMethod: paymentMethodId,
       orderStatus: "Processing",
       address: addressId,
       placeType,
@@ -177,7 +192,7 @@ export const createOrderForCart = async (req, res) => {
         quantity: item.quantity,
       }));
 
-       // Add delivery fee as separate line item
+      // Add delivery fee as separate line item
       if (deliveryFee > 0) {
         line_items.push({
           price_data: {
@@ -192,7 +207,6 @@ export const createOrderForCart = async (req, res) => {
         });
       }
 
-      
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
         line_items,
@@ -211,7 +225,8 @@ export const createOrderForCart = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -225,7 +240,8 @@ export const createOrderForCart = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -238,7 +254,6 @@ export const createOrderForCart = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 // ==================== CREATE ORDER FOR SINGLE PRODUCT ====================
 export const createOrderForProduct = async (req, res) => {
@@ -305,6 +320,17 @@ export const createOrderForProduct = async (req, res) => {
       });
     }
 
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     // Validate in-place order
     let reservationDate;
     if (placeType === "In-Place") {
@@ -333,9 +359,14 @@ export const createOrderForProduct = async (req, res) => {
     // Calculate delivery fee
     const subtotal = product.price * quantity;
     let deliveryFee = 0;
-    
+
     try {
-      deliveryFee = await calculateDeliveryFee(placeType, governorate, city, subtotal);
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
     } catch (error) {
       return res.status(400).json({
         success: false,
@@ -362,12 +393,13 @@ export const createOrderForProduct = async (req, res) => {
       totalPrice,
       totalQuantity: quantity,
       paymentStatus: "Pending",
-      paymentMethod,
+      paymentMethod: paymentMethodId,
       orderStatus: "Processing",
       address: addressId,
       placeType,
       table: tableId || null,
-      deliveryLocation: placeType === "Online" ? { governorate, city } : undefined,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
     });
 
     // Create reservation for in-place orders
@@ -425,7 +457,8 @@ export const createOrderForProduct = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -438,7 +471,8 @@ export const createOrderForProduct = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -522,6 +556,17 @@ export const createOrderForMultipleProducts = async (req, res) => {
       });
     }
 
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     // Validate in-place order
     let reservationDate;
     if (placeType === "In-Place") {
@@ -550,9 +595,14 @@ export const createOrderForMultipleProducts = async (req, res) => {
 
     // Calculate delivery fee
     let deliveryFee = 0;
-    
+
     try {
-      deliveryFee = await calculateDeliveryFee(placeType, governorate, city, subtotal);
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
     } catch (error) {
       return res.status(400).json({
         success: false,
@@ -579,12 +629,13 @@ export const createOrderForMultipleProducts = async (req, res) => {
       totalPrice,
       totalQuantity,
       paymentStatus: "Pending",
-      paymentMethod,
+      paymentMethod: paymentMethodId,
       orderStatus: "Processing",
       address: addressId,
       placeType,
       table: tableId || null,
-      deliveryLocation: placeType === "Online" ? { governorate, city } : undefined,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
     });
 
     // Create reservation for in-place orders
@@ -644,7 +695,8 @@ export const createOrderForMultipleProducts = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -657,7 +709,8 @@ export const createOrderForMultipleProducts = async (req, res) => {
       const populatedOrder = await Order.findById(order._id)
         .populate("products.product")
         .populate("address")
-        .populate("table");
+        .populate("table")
+        .populate("paymentMethod");
 
       return res.status(201).json({
         success: true,
@@ -679,7 +732,8 @@ export const getOrderDetails = async (req, res) => {
       .populate("products.product")
       .populate("address")
       .populate("buyer", "-refreshToken -password -__v")
-      .populate("table");
+      .populate("table")
+      .populate("paymentMethod");
 
     if (!order)
       return res
@@ -707,6 +761,7 @@ export const getAllOrdersForUser = async (req, res) => {
       .populate("products.product")
       .populate("address")
       .populate("table")
+      .populate("paymentMethod")
       .skip(skip)
       .limit(limitNum)
       .sort({ createdAt: -1 });
@@ -748,6 +803,7 @@ export const getCurrentUserOrders = async (req, res) => {
       .populate("products.product")
       .populate("address")
       .populate("table")
+      .populate("paymentMethod")
       .skip(skip)
       .limit(limitNum)
       .sort({ createdAt: -1 });
@@ -792,6 +848,7 @@ export const getAllOrders = async (req, res) => {
       .populate("address")
       .populate("buyer", "-password -__v -refreshToken")
       .populate("table")
+      .populate("paymentMethod")
       .skip(skip)
       .limit(limitNum)
       .sort({ createdAt: -1 });
@@ -918,6 +975,7 @@ export const getOrdersByOrderStatus = async (req, res) => {
           .populate("address")
           .populate("buyer", "-password -__v -refreshToken")
           .populate("table")
+          .populate("paymentMethod")
           .skip(skip)
           .limit(limitNum)
           .sort({ createdAt: -1 });
@@ -1019,7 +1077,8 @@ export const updateOrderPlaceType = async (req, res) => {
       .populate("products.product")
       .populate("address")
       .populate("table")
-      .populate("buyer", "-password -__v -refreshToken");
+      .populate("buyer", "-password -__v -refreshToken")
+      .populate("paymentMethod");
 
     return res.status(200).json({
       success: true,
@@ -1069,13 +1128,13 @@ export const refundOrder = async (req, res) => {
 
     // Get Stripe config
     const config = await StripeConfig.findOne({ isActive: true });
-    
+
     // Check refund window
     if (config && config.refundWindowHours > 0) {
       const orderDate = new Date(order.createdAt);
       const now = new Date();
       const hoursSinceOrder = (now - orderDate) / (1000 * 60 * 60);
-      
+
       if (hoursSinceOrder > config.refundWindowHours) {
         return res.status(400).json({
           success: false,
@@ -1086,7 +1145,7 @@ export const refundOrder = async (req, res) => {
 
     // Validate refund amount
     let amountToRefund = order.totalPrice;
-    
+
     if (refundAmount) {
       if (!config || !config.allowPartialRefunds) {
         return res.status(400).json({
@@ -1094,19 +1153,21 @@ export const refundOrder = async (req, res) => {
           message: "Partial refunds are not allowed",
         });
       }
-      
+
       if (refundAmount <= 0 || refundAmount > order.totalPrice) {
         return res.status(400).json({
           success: false,
           message: "Invalid refund amount",
         });
       }
-      
+
       amountToRefund = refundAmount;
     }
 
     // Get payment intent from session
-    const session = await stripe.checkout.sessions.retrieve(order.stripeSessionID);
+    const session = await stripe.checkout.sessions.retrieve(
+      order.stripeSessionID
+    );
     const paymentIntentId = session.payment_intent;
 
     if (!paymentIntentId) {
@@ -1125,7 +1186,7 @@ export const refundOrder = async (req, res) => {
 
     // Update order
     const isPartialRefund = amountToRefund < order.totalPrice;
-    
+
     order.paymentStatus = isPartialRefund ? "PartiallyRefunded" : "Refunded";
     order.orderStatus = "Cancelled";
     order.refundDetails = {
@@ -1135,7 +1196,7 @@ export const refundOrder = async (req, res) => {
       refundReason: refundReason || "Customer requested refund",
       refundStatus: refund.status === "succeeded" ? "Completed" : "Pending",
     };
-    
+
     await order.save();
 
     return res.status(200).json({
@@ -1148,7 +1209,9 @@ export const refundOrder = async (req, res) => {
           status: refund.status,
         },
       },
-      message: `${isPartialRefund ? "Partial refund" : "Full refund"} processed successfully`,
+      message: `${
+        isPartialRefund ? "Partial refund" : "Full refund"
+      } processed successfully`,
     });
   } catch (error) {
     console.error("Error in refundOrder:", error);
@@ -1172,7 +1235,7 @@ export const cancelOrder = async (req, res) => {
       });
     }
 
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).populate("paymentMethod");
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -1190,14 +1253,15 @@ export const cancelOrder = async (req, res) => {
     const config = await StripeConfig.findOne({ isActive: true });
     let refundMessage = "";
 
-    // Handle Card payments
-    if (order.paymentMethod === "Card" && order.stripeSessionID) {
-      
+    // Handle Card payments (check payment method name)
+    if (order.paymentMethod?.name === "Card" && order.stripeSessionID) {
       // Case 1: Payment is completed - issue refund
       if (order.paymentStatus === "Completed") {
         if (config?.autoRefundOnCancellation) {
           try {
-            const session = await stripe.checkout.sessions.retrieve(order.stripeSessionID);
+            const session = await stripe.checkout.sessions.retrieve(
+              order.stripeSessionID
+            );
             const paymentIntentId = session.payment_intent;
 
             if (paymentIntentId) {
@@ -1211,9 +1275,10 @@ export const cancelOrder = async (req, res) => {
                 refundAmount: order.totalPrice,
                 refundDate: new Date(),
                 refundReason: cancellationReason || "Order cancelled",
-                refundStatus: refund.status === "succeeded" ? "Completed" : "Pending",
+                refundStatus:
+                  refund.status === "succeeded" ? "Completed" : "Pending",
               };
-              
+
               order.paymentStatus = "Refunded";
               refundMessage = " and refund initiated";
             }
@@ -1222,7 +1287,7 @@ export const cancelOrder = async (req, res) => {
             refundMessage = " (refund failed - please process manually)";
           }
         }
-      } 
+      }
       // Case 2: Payment is pending - expire the Stripe session
       else if (order.paymentStatus === "Pending") {
         try {
@@ -1237,7 +1302,7 @@ export const cancelOrder = async (req, res) => {
       }
     }
     // COD orders - just cancel (no refund needed)
-    else if (order.paymentMethod === "COD") {
+    else if (order.paymentMethod?.name === "COD") {
       refundMessage = " (no payment to refund for COD)";
     }
 
@@ -1264,5 +1329,798 @@ export const cancelOrder = async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+};
+
+// ==================== CREATE ORDER WITH PAYMOB (CART) ====================
+export const createOrderForCartWithPaymob = async (req, res) => {
+  const FRONTEND_URL =
+    process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
+
+  try {
+    const userId = req.user?._id;
+    const { cartId, addressId } = req.params;
+    const {
+      placeType = "Online",
+      tableId,
+      slot,
+      date,
+      paymentMethod = "Card",
+      governorate,
+      city,
+    } = req.body;
+
+    // Validation
+    if (!userId)
+      return res
+        .status(401)
+        .json({ success: false, message: "User not authenticated" });
+
+    if (!cartId || !addressId)
+      return res.status(400).json({
+        success: false,
+        message: "Cart ID and Address ID are required",
+      });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
+
+    if (placeType === "In-Place" && !tableId)
+      return res.status(400).json({
+        success: false,
+        message: "Table ID is required for in-place orders",
+      });
+
+    if (placeType === "In-Place" && (!date || !slot))
+      return res.status(400).json({
+        success: false,
+        message: "Date and time slot are required for in-place orders",
+      });
+
+    if (placeType !== "In-Place" && tableId) {
+      return res.status(400).json({
+        success: false,
+        message: "tableId is only allowed for In-Place orders",
+      });
+    }
+
+    const paymentValidation = await validatePaymentMethod(paymentMethod);
+    if (!paymentValidation.success) {
+      return res.status(paymentValidation.statusCode).json({
+        success: false,
+        message: paymentValidation.message,
+      });
+    }
+
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    // Validate in-place order using helper
+    let reservationDate;
+    if (placeType === "In-Place") {
+      const validation = await validateInPlaceOrder(tableId, slot, date);
+      if (!validation.success) {
+        return res.status(validation.statusCode).json({
+          success: false,
+          message: validation.message,
+        });
+      }
+      reservationDate = validation.reservationDate;
+    }
+
+    const cart = await Cart.findById(cartId).populate("products.product");
+    if (!cart)
+      return res
+        .status(404)
+        .json({ success: false, message: "Cart not found" });
+    if (!cart.products.length)
+      return res.status(400).json({ success: false, message: "Cart is empty" });
+
+    // Calculate delivery fee
+    const subtotal = cart.totalPrice;
+    let deliveryFee = 0;
+
+    try {
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
+    // Create Order
+    const order = await Order.create({
+      buyer: userId,
+      products: cart.products.map((item) => ({
+        product: item.product._id,
+        quantity: item.quantity,
+      })),
+      subtotal,
+      deliveryFee,
+      totalPrice,
+      totalQuantity: cart.totalQuantity,
+      paymentStatus: "Pending",
+      paymentMethod: paymentMethodId,
+      orderStatus: "Processing",
+      address: addressId,
+      placeType,
+      table: tableId || null,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
+    });
+
+    // Create reservation for in-place orders
+    if (placeType === "In-Place") {
+      await createReservationForOrder(
+        userId,
+        tableId,
+        reservationDate,
+        order._id
+      );
+    }
+
+    // Handle payment method routing
+    if (paymentMethod === "Paymob-Card" || paymentMethod === "Paymob-Wallet") {
+      // Paymob payment flow
+      const paymobResult = await PaymobService.createPaymentForOrder(
+        order,
+        req,
+        paymentMethod
+      );
+
+      if (!paymobResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: paymobResult.message || "Failed to create Paymob payment",
+        });
+      }
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        paymentUrl: paymobResult.checkoutUrl,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Paymob checkout session created. Redirect to payment.",
+      });
+    } else if (paymentMethod === "Card") {
+      // Stripe payment flow
+      const line_items = cart.products.map((item) => ({
+        price_data: {
+          currency,
+          product_data: {
+            name: item.product.name,
+            images: item.product.images || [],
+          },
+          unit_amount: Math.round(item.product.price * 100),
+        },
+        quantity: item.quantity,
+      }));
+
+      // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items,
+        mode: "payment",
+        success_url: `${FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        cancel_url: `${FRONTEND_URL}/payment/cancelled?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        metadata: {
+          orderId: order._id.toString(),
+          userId: userId.toString(),
+          cartId: cartId.toString(),
+        },
+      });
+
+      await Order.findByIdAndUpdate(order._id, { stripeSessionID: session.id });
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        session_url: session.url,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Stripe session created. Redirect to payment.",
+      });
+    } else {
+      // COD: no payment gateway
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        order: populatedOrder,
+        message: "COD order created successfully",
+      });
+    }
+  } catch (error) {
+    console.error("Error in createOrderForCartWithPaymob:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== CREATE ORDER WITH PAYMOB (SINGLE PRODUCT) ====================
+export const createOrderForProductWithPaymob = async (req, res) => {
+  const FRONTEND_URL =
+    process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
+
+  try {
+    const userId = req.user?._id;
+    const { productId, addressId } = req.params;
+    const {
+      placeType = "Online",
+      tableId,
+      slot,
+      date,
+      quantity = 1,
+      paymentMethod = "Card",
+      governorate,
+      city,
+    } = req.body;
+
+    if (!userId)
+      return res
+        .status(401)
+        .json({ success: false, message: "User not authenticated" });
+
+    if (!productId || !addressId)
+      return res.status(400).json({
+        success: false,
+        message: "Product ID and Address ID are required",
+      });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
+
+    if (placeType === "In-Place" && !tableId)
+      return res.status(400).json({
+        success: false,
+        message: "Table ID is required for in-place orders",
+      });
+
+    if (placeType === "In-Place" && (!date || !slot))
+      return res.status(400).json({
+        success: false,
+        message: "Date and time slot are required for in-place orders",
+      });
+
+    if (placeType !== "In-Place" && (tableId || date || slot)) {
+      return res.status(400).json({
+        success: false,
+        message: "tableId, date, and slot are only allowed for In-Place orders",
+      });
+    }
+
+    const paymentValidation = await validatePaymentMethod(paymentMethod);
+    if (!paymentValidation.success) {
+      return res.status(paymentValidation.statusCode).json({
+        success: false,
+        message: paymentValidation.message,
+      });
+    }
+
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    // Validate in-place order
+    let reservationDate;
+    if (placeType === "In-Place") {
+      const validation = await validateInPlaceOrder(tableId, slot, date);
+      if (!validation.success) {
+        return res.status(validation.statusCode).json({
+          success: false,
+          message: validation.message,
+        });
+      }
+      reservationDate = validation.reservationDate;
+    }
+
+    if (!Number.isInteger(quantity) || quantity < 1)
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be a positive integer",
+      });
+
+    const product = await Product.findById(productId);
+    if (!product)
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found" });
+
+    // Calculate delivery fee
+    const subtotal = product.price * quantity;
+    let deliveryFee = 0;
+
+    try {
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
+    const order = await Order.create({
+      buyer: userId,
+      products: [{ product: productId, quantity }],
+      subtotal,
+      deliveryFee,
+      totalPrice,
+      totalQuantity: quantity,
+      paymentStatus: "Pending",
+      paymentMethod: paymentMethodId,
+      orderStatus: "Processing",
+      address: addressId,
+      placeType,
+      table: tableId || null,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
+    });
+
+    // Create reservation for in-place orders
+    if (placeType === "In-Place") {
+      await createReservationForOrder(
+        userId,
+        tableId,
+        reservationDate,
+        order._id
+      );
+    }
+
+    // Handle payment method routing
+    if (paymentMethod === "Paymob-Card" || paymentMethod === "Paymob-Wallet") {
+      // Paymob payment flow
+      const paymobResult = await PaymobService.createPaymentForOrder(
+        order,
+        req,
+        paymentMethod
+      );
+
+      if (!paymobResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: paymobResult.message || "Failed to create Paymob payment",
+        });
+      }
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        paymentUrl: paymobResult.checkoutUrl,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Paymob checkout session created. Redirect to payment.",
+      });
+    } else if (paymentMethod === "Card") {
+      // Stripe payment flow
+      const line_items = [
+        {
+          price_data: {
+            currency,
+            product_data: { name: product.name, images: product.images || [] },
+            unit_amount: Math.round(product.price * 100),
+          },
+          quantity,
+        },
+      ];
+
+      // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items,
+        mode: "payment",
+        success_url: `${FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        cancel_url: `${FRONTEND_URL}/payment/cancelled?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        metadata: {
+          orderId: order._id.toString(),
+          userId: userId.toString(),
+          productId,
+        },
+      });
+
+      await Order.findByIdAndUpdate(order._id, { stripeSessionID: session.id });
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        session_url: session.url,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Stripe session created. Redirect to payment.",
+      });
+    } else {
+      // COD: no payment gateway
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        order: populatedOrder,
+        message: "COD order created successfully",
+      });
+    }
+  } catch (error) {
+    console.error("Error in createOrderForProductWithPaymob:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== CREATE ORDER WITH PAYMOB (MULTIPLE PRODUCTS) ====================
+export const createOrderForMultipleProductsWithPaymob = async (req, res) => {
+  const FRONTEND_URL =
+    process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
+
+  try {
+    const userId = req.user?._id;
+    const { addressId } = req.params;
+    const {
+      products,
+      placeType = "Online",
+      tableId,
+      slot,
+      date,
+      paymentMethod = "Card",
+      governorate,
+      city,
+    } = req.body;
+
+    if (!userId)
+      return res
+        .status(401)
+        .json({ success: false, message: "User not authenticated" });
+
+    if (!products || !Array.isArray(products) || products.length === 0)
+      return res
+        .status(400)
+        .json({ success: false, message: "Products array is required" });
+
+    // Validate delivery location for online orders
+    if (placeType === "Online" && (!governorate || !city)) {
+      return res.status(400).json({
+        success: false,
+        message: "Governorate and city are required for online orders",
+      });
+    }
+
+    if (placeType !== "In-Place" && (tableId || date || slot)) {
+      return res.status(400).json({
+        success: false,
+        message: "tableId, date, and slot are only allowed for In-Place orders",
+      });
+    }
+
+    if (!addressId)
+      return res
+        .status(400)
+        .json({ success: false, message: "Address ID is required" });
+
+    if (placeType === "In-Place" && !tableId)
+      return res.status(400).json({
+        success: false,
+        message: "Table ID is required for in-place orders",
+      });
+
+    if (placeType === "In-Place" && (!date || !slot))
+      return res.status(400).json({
+        success: false,
+        message: "Date and time slot are required for in-place orders",
+      });
+
+    // Validate payment method
+    const paymentValidation = await validatePaymentMethod(paymentMethod);
+    if (!paymentValidation.success) {
+      return res.status(paymentValidation.statusCode).json({
+        success: false,
+        message: paymentValidation.message,
+      });
+    }
+
+    // Get PaymentMethod ObjectId
+    let paymentMethodId;
+    try {
+      paymentMethodId = await getPaymentMethodId(paymentMethod);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    // Validate in-place order
+    let reservationDate;
+    if (placeType === "In-Place") {
+      const validation = await validateInPlaceOrder(tableId, slot, date);
+      if (!validation.success) {
+        return res.status(validation.statusCode).json({
+          success: false,
+          message: validation.message,
+        });
+      }
+      reservationDate = validation.reservationDate;
+    }
+
+    let subtotal = 0;
+    let totalQuantity = 0;
+
+    const enrichedProducts = await Promise.all(
+      products.map(async (item) => {
+        const product = await Product.findById(item.productId);
+        if (!product) throw new Error(`Product not found: ${item.productId}`);
+        subtotal += product.price * item.quantity;
+        totalQuantity += item.quantity;
+        return { product: product._id, quantity: item.quantity };
+      })
+    );
+
+    // Calculate delivery fee
+    let deliveryFee = 0;
+
+    try {
+      deliveryFee = await calculateDeliveryFee(
+        placeType,
+        governorate,
+        city,
+        subtotal
+      );
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const totalPrice = subtotal + deliveryFee;
+
+    // Validate order amount
+    const amountValidation = await validateOrderAmount(totalPrice);
+    if (!amountValidation.success) {
+      return res.status(amountValidation.statusCode).json({
+        success: false,
+        message: amountValidation.message,
+      });
+    }
+
+    const order = await Order.create({
+      buyer: userId,
+      products: enrichedProducts,
+      subtotal,
+      deliveryFee,
+      totalPrice,
+      totalQuantity,
+      paymentStatus: "Pending",
+      paymentMethod,
+      orderStatus: "Processing",
+      address: addressId,
+      placeType,
+      table: tableId || null,
+      deliveryLocation:
+        placeType === "Online" ? { governorate, city } : undefined,
+    });
+
+    // Create reservation for in-place orders
+    if (placeType === "In-Place") {
+      await createReservationForOrder(
+        userId,
+        tableId,
+        reservationDate,
+        order._id
+      );
+    }
+
+    // Handle payment method routing
+    if (paymentMethod === "Paymob-Card" || paymentMethod === "Paymob-Wallet") {
+      // Paymob payment flow
+      const paymobResult = await PaymobService.createPaymentForOrder(
+        order,
+        req,
+        paymentMethod
+      );
+      if (!paymobResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: paymobResult.message || "Failed to create Paymob payment",
+        });
+      }
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        paymentUrl: paymobResult.checkoutUrl,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Paymob checkout session created. Redirect to payment.",
+      });
+    } else if (paymentMethod === "Card") {
+      // Stripe payment flow
+      const line_items = await Promise.all(
+        enrichedProducts.map(async (item) => {
+          const product = await Product.findById(item.product);
+          return {
+            price_data: {
+              currency,
+              product_data: {
+                name: product.name,
+                images: product.images || [],
+              },
+              unit_amount: Math.round(product.price * 100),
+            },
+            quantity: item.quantity,
+          };
+        })
+      );
+
+      // Add delivery fee as separate line item
+      if (deliveryFee > 0) {
+        line_items.push({
+          price_data: {
+            currency,
+            product_data: {
+              name: "Delivery Fee",
+              description: `Delivery to ${city}, ${governorate}`,
+            },
+            unit_amount: Math.round(deliveryFee * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items,
+        mode: "payment",
+        success_url: `${FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        cancel_url: `${FRONTEND_URL}/payment/cancelled?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+        metadata: { orderId: order._id.toString(), userId: userId.toString() },
+      });
+
+      await Order.findByIdAndUpdate(order._id, { stripeSessionID: session.id });
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        session_url: session.url,
+        orderId: order._id,
+        order: populatedOrder,
+        message: "Stripe session created. Redirect to payment.",
+      });
+    } else {
+      // COD: no payment gateway
+      const populatedOrder = await Order.findById(order._id)
+        .populate("products.product")
+        .populate("address")
+        .populate("table")
+        .populate("paymentMethod");
+
+      return res.status(201).json({
+        success: true,
+        order: populatedOrder,
+        message: "COD order created successfully",
+      });
+    }
+  } catch (error) {
+    console.error("Error in createOrderForMultipleProductsWithPaymob:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
