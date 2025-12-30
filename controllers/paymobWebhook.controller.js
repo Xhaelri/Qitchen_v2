@@ -69,7 +69,7 @@ export const checkPaymentStatus = async (req, res) => {
     }
 
     const order = await Order.findById(orderId)
-      .select('paymentStatus orderStatus uniquePaymentId qrCodeImage paymobIntentionId');
+      .select('paymentStatus orderStatus uniquePaymentId paymobIntentionId');
 
     if (!order) {
       return res.status(404).json({
@@ -85,7 +85,6 @@ export const checkPaymentStatus = async (req, res) => {
         uniquePaymentId: order.uniquePaymentId,
         paymentStatus: order.paymentStatus,
         orderStatus: order.orderStatus,
-        qrCodeImage: order.qrCodeImage,
         paymobIntentionId: order.paymobIntentionId,
       },
       message: 'Payment status fetched successfully',

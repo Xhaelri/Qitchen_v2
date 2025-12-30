@@ -18,6 +18,8 @@ import { router as srtipeRouter } from "./routes/stripe.route.js";
 import { router as homeRouter } from "./routes/home.route.js";
 import { router as adminRouter } from "./routes/admin.route.js";
 import { router as paymobRouter } from "./routes/paymob.route.js";
+import { router as paymobConfigRouter } from "./routes/paymobConfig.route.js";
+import { router as stripeConfigRouter } from "./routes/stripeConfig.route.js";
 
 const app = express();
 
@@ -45,6 +47,12 @@ app.use("/api/v2/table", tableRouter);
 app.use("/api/v2/reservation", reservationRouter);
 app.use("/api/v2/home", homeRouter);
 app.use("/api/v2/admin", adminRouter);
+
+app.use("/api/v2/paymob", paymobRouter);
+app.use("/api/v2/stripe", srtipeRouter);
+
+app.use("/api/v2/paymob-config", paymobConfigRouter);
+app.use("/api/v2/stripe-config", stripeConfigRouter);
 
 app.use(notFound);
 app.use(errorHandler);

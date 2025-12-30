@@ -1,4 +1,3 @@
-// models/order.model.js (COMPLETE UPDATED VERSION)
 import mongoose, { Schema } from "mongoose";
 import aggregatePaginate from "mongoose-aggregate-paginate-v2";
 
@@ -177,13 +176,7 @@ const orderSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
     },
-    // QR Code for order verification
-    qrCodeData: {
-      type: String,
-    },
-    qrCodeImage: {
-      type: String,
-    },
+
   },
   { timestamps: true }
 );

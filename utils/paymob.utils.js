@@ -113,16 +113,40 @@ export function getBaseUrl(req) {
 }
 
 /**
+ * Get frontend URL
+ */
+export function getFrontendUrl() {
+  return process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL || "http://localhost:3000";
+}
+
+/**
  * Create Paymob Intention API payment
+ * 
+ * @param {Object} params
+ * @param {number} params.amount - Amount in currency units (e.g., 100 for 100 EGP)
+ * @param {string} params.currency - Currency code (default: "EGP")
+ * @param {string} params.integrationName - Integration name from Paymob dashboard
+ * @param {Object} params.userDetails - User details (name, email, phoneNumber)
+ * @param {string} params.uniqueId - Unique payment ID
+ * @param {string} params.baseUrl - Backend base URL for webhooks
+ * @param {string} params.frontendUrl - Frontend URL for redirects (optional)
+ * @param {string} params.redirectUrl - Custom redirect URL (optional)
+ * @param {string} params.webhookUrl - Custom webhook URL (optional)
+ * @param {Array} params.items - Line items (optional)
+ * @param {number} params.expirationMinutes - Expiration in minutes (default: 30, max: 51840 = 36 days)
  */
 export async function createPaymobIntention({
   amount,
   currency = "EGP",
-  integrationName, // ✅ Changed from integrationId to integrationName
+  integrationName,
   userDetails,
   uniqueId,
   baseUrl,
+  frontendUrl,
+  redirectUrl,
+  webhookUrl,
   items = [],
+  expirationMinutes = 30,
 }) {
   try {
     const amountCents = Math.round(amount * 100);
@@ -131,10 +155,27 @@ export async function createPaymobIntention({
     const firstName = nameParts[0] || userDetails.name;
     const lastName = nameParts.slice(1).join(" ") || userDetails.name;
 
+    // Get URLs with fallbacks
+    const actualFrontendUrl = frontendUrl || getFrontendUrl();
+    const actualRedirectUrl = redirectUrl || `${actualFrontendUrl}/payment-redirect?orderId=${uniqueId}`;
+    const actualWebhookUrl = webhookUrl || `${baseUrl}/api/v2/paymob-webhook`;
+
+    // ✅ FIX: Calculate expiration as RELATIVE SECONDS, not absolute timestamp
+    // Paymob expects: number of seconds from now (max: 3,110,400 = ~36 days)
+    // expirationMinutes is in minutes, convert to seconds
+    let expirationSeconds = expirationMinutes * 60;
+    
+    // Paymob max is 3,110,400 seconds (~36 days)
+    const MAX_EXPIRATION_SECONDS = 3110400;
+    if (expirationSeconds > MAX_EXPIRATION_SECONDS) {
+      console.warn(`Expiration ${expirationSeconds}s exceeds Paymob max (${MAX_EXPIRATION_SECONDS}s). Using max value.`);
+      expirationSeconds = MAX_EXPIRATION_SECONDS;
+    }
+
     const intentionPayload = {
       amount: amountCents,
       currency,
-      payment_methods: [integrationName], // ✅ Use the integration name as string
+      payment_methods: [integrationName],
       items:
         items.length > 0
           ? items
@@ -162,23 +203,26 @@ export async function createPaymobIntention({
         first_name: firstName,
         last_name: lastName,
         email: userDetails.email,
-        phone_number: userDetails.phoneNumber || "+20",
+        extras: {
+          re: uniqueId,
+        },
       },
       extras: {
         ee: uniqueId,
         merchant_order_id: uniqueId,
       },
-      // ✅ Redirect to FRONTEND after payment
-      redirection_url: `${frontendUrl}/payment-redirect?orderId=${uniqueId}`,
-      // ✅ Webhook goes to BACKEND API
-      notification_url: `${baseUrl}/api/v2/paymob-webhook`,
+      redirection_url: actualRedirectUrl,
+      notification_url: actualWebhookUrl,
       special_reference: uniqueId,
+      // ✅ FIX: expiration is RELATIVE seconds from now, NOT absolute timestamp
+      expiration: expirationSeconds,
     };
 
     console.log(
       "Creating Paymob Intention:",
       JSON.stringify(intentionPayload, null, 2)
     );
+
     const response = await axios.post(
       `${process.env.PAYMOB_API_URL}/v1/intention/`,
       intentionPayload,
@@ -217,5 +261,6 @@ export default {
   generateHMAC,
   verifyPaymobHMAC,
   getBaseUrl,
+  getFrontendUrl,
   createPaymobIntention,
 };

@@ -1,11 +1,10 @@
 import PaymentMethod from "../models/paymentMethod.model.js";
-import StripeConfig from "../models/stripConfig.model.js";
+import StripeConfig from "../models/stripeConfig.model.js";
 import DeliveryLocation from "../models/deliveryLocation.model.js";
 import {
   uploadOnCloudinary,
   destroyFromCloudinary,
 } from "../utils/cloudinary.js";
-
 
 // Get all payment methods
 export const getAllPaymentMethods = async (req, res) => {
@@ -50,7 +49,8 @@ export const getActivePaymentMethods = async (req, res) => {
 // Create a new payment method
 export const createPaymentMethod = async (req, res) => {
   try {
-    const { name, displayName, description, isActive, provider } = req.body || {};
+    const { name, displayName, description, isActive, provider } =
+      req.body || {};
 
     if (!name || !displayName) {
       return res.status(400).json({
@@ -69,7 +69,8 @@ export const createPaymentMethod = async (req, res) => {
     if (!["Card", "COD", "Paymob-Card", "Paymob-Wallet"].includes(name)) {
       return res.status(400).json({
         success: false,
-        message: "Payment method name must be 'Card', 'COD', 'Paymob-Card', or 'Paymob-Wallet'",
+        message:
+          "Payment method name must be 'Card', 'COD', 'Paymob-Card', or 'Paymob-Wallet'",
       });
     }
 

@@ -152,29 +152,11 @@ export function validateSlotAndDate(slot, date) {
 /**
  * Comprehensive validation for in-place orders
  * @param {string} tableId - MongoDB ObjectId of the table
- * @param {string} slot - Time slot in HH:MM format
- * @param {string} date - Date in YYYY-MM-DD format
- * @returns {Promise<Object>} Object with success status and reservationDate/error details
+
+ * @returns {Promise<Object>} Object with success status details
  */
-export async function validateInPlaceOrder(tableId, slot, date) {
-  // Validate slot and date
-  const slotValidation = validateSlotAndDate(slot, date);
-  if (!slotValidation.success) {
-    return slotValidation;
-  }
-
-  const { reservationDate } = slotValidation;
-
-  // Check table availability at specific slot
-  const tableAvailable = await isTableAvailableAtSlot(tableId, reservationDate);
-  if (!tableAvailable) {
-    return {
-      success: false,
-      message: "Selected table is not available at this time slot. Please choose another table or time slot.",
-      statusCode: 400,
-    };
-  }
-
+export async function validateInPlaceOrder(tableId) {
+ 
   // Validate table exists and is active
   const tableValidation = await validateTable(tableId);
   if (!tableValidation.success) {
@@ -183,29 +165,8 @@ export async function validateInPlaceOrder(tableId, slot, date) {
 
   return {
     success: true,
-    reservationDate,
     table: tableValidation.table,
   };
-}
-
-/**
- * Creates a reservation for an order
- * @param {string} userId - MongoDB ObjectId of the user
- * @param {string} tableId - MongoDB ObjectId of the table
- * @param {Date} reservationDate - Date object for the reservation
- * @param {string} orderId - MongoDB ObjectId of the order
- * @returns {Promise<Object>} Created reservation object
- */
-export async function createReservationForOrder(userId, tableId, reservationDate, orderId) {
-  const reservation = await Reservation.create({
-    user: userId,
-    table: tableId,
-    reservationDate: reservationDate,
-    status: "Confirmed",
-    orderId: orderId,
-  });
-
-  return reservation;
 }
 
 /**
