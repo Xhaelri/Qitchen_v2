@@ -1,10 +1,14 @@
+// paymobConfig.controller.js
+// ✅ Paymob provider-specific settings ONLY
+// ❌ Payment method activation is via PaymentMethod.isActive (NOT here)
+
 import PaymobConfig from "../models/paymobConfig.model.js";
 
 // ==================== GET CONFIG ====================
 
 /**
  * Get active Paymob configuration
- * GET /api/v2/admin/paymob-config
+ * GET /api/v2/paymob-config
  */
 export const getPaymobConfig = async (req, res) => {
   try {
@@ -21,6 +25,7 @@ export const getPaymobConfig = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: config,
+      summary: config.getSummary ? config.getSummary() : null,
       message: "Paymob configuration fetched successfully",
     });
   } catch (error) {
@@ -36,13 +41,14 @@ export const getPaymobConfig = async (req, res) => {
 
 /**
  * Update Paymob configuration
- * PUT /api/v2/admin/paymob-config
+ * PATCH /api/v2/paymob-config
  */
 export const updatePaymobConfig = async (req, res) => {
   try {
     const updates = req.body;
 
-    // Fields that can be updated
+    // ✅ Provider-specific settings ONLY
+    // ❌ NO activation fields (cardPaymentEnabled, walletPaymentEnabled, etc.)
     const allowedFields = [
       // Order amount settings
       "minOrderAmount",
@@ -61,38 +67,25 @@ export const updatePaymobConfig = async (req, res) => {
       // Checkout settings
       "checkoutType",
 
-      // Card payment settings
-      "cardPaymentEnabled",
+      // Integration names (from Paymob dashboard)
       "cardIntegrationName",
+      "walletIntegrationName",
+      "kioskIntegrationName",
+      "installmentsIntegrationName",
+      "valuIntegrationName",
+
+      // Card payment options (NOT activation)
       "saveCardEnabled",
       "require3DSecure",
 
-      // Wallet payment settings
-      "walletPaymentEnabled",
-      "walletIntegrationName",
-
-      // Kiosk payment settings
-      "kioskPaymentEnabled",
-      "kioskIntegrationName",
+      // Kiosk options
       "kioskExpirationHours",
 
-      // Installments settings
-      "installmentsEnabled",
-      "installmentsIntegrationName",
+      // Installments options
       "minInstallmentAmount",
 
-      // BNPL settings
-      "valuEnabled",
-      "valuIntegrationName",
+      // ValU options
       "valuMinAmount",
-      "souhoolaEnabled",
-      "souhoolaIntegrationName",
-      "symplEnabled",
-      "symplIntegrationName",
-
-      // Apple Pay settings
-      "applePayEnabled",
-      "applePayIntegrationName",
 
       // Webhook settings
       "webhookEnabled",
@@ -109,7 +102,7 @@ export const updatePaymobConfig = async (req, res) => {
       "defaultDeliveryFee",
       "freeDeliveryThreshold",
 
-      // Status flags
+      // Status flags (provider ready, NOT payment method activation)
       "isActive",
       "isLiveMode",
 
@@ -129,6 +122,21 @@ export const updatePaymobConfig = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "No valid fields to update",
+      });
+    }
+
+    // Validation
+    if (filteredUpdates.minOrderAmount !== undefined && filteredUpdates.minOrderAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum order amount cannot be negative",
+      });
+    }
+
+    if (filteredUpdates.maxOrderAmount !== undefined && filteredUpdates.maxOrderAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum order amount cannot be negative",
       });
     }
 
@@ -162,102 +170,11 @@ export const updatePaymobConfig = async (req, res) => {
   }
 };
 
-// ==================== GET ENABLED PAYMENT METHODS ====================
-
-/**
- * Get list of enabled Paymob payment methods
- * GET /api/v2/admin/paymob-config/payment-methods
- */
-export const getEnabledPaymentMethods = async (req, res) => {
-  try {
-    const config = await PaymobConfig.findOne({ isActive: true });
-
-    if (!config) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        message: "No Paymob configuration found",
-      });
-    }
-
-    const enabledMethods = config.getEnabledPaymentMethods();
-
-    return res.status(200).json({
-      success: true,
-      data: enabledMethods,
-      message: "Enabled payment methods fetched successfully",
-    });
-  } catch (error) {
-    console.error("Error fetching enabled payment methods:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-// ==================== TOGGLE PAYMENT METHOD ====================
-
-/**
- * Toggle a specific payment method on/off
- * PATCH /api/v2/admin/paymob-config/payment-method/:method
- */
-export const togglePaymentMethod = async (req, res) => {
-  try {
-    const { method } = req.params;
-    const { enabled } = req.body;
-
-    const methodFieldMap = {
-      "Paymob-Card": "cardPaymentEnabled",
-      "Paymob-Wallet": "walletPaymentEnabled",
-      "Paymob-Kiosk": "kioskPaymentEnabled",
-      "Paymob-Installments": "installmentsEnabled",
-      "Paymob-ValU": "valuEnabled",
-      "Paymob-Souhoola": "souhoolaEnabled",
-      "Paymob-SYMPL": "symplEnabled",
-      "Paymob-ApplePay": "applePayEnabled",
-    };
-
-    const field = methodFieldMap[method];
-
-    if (!field) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid payment method: ${method}. Valid methods: ${Object.keys(methodFieldMap).join(", ")}`,
-      });
-    }
-
-    let config = await PaymobConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await PaymobConfig.create({ isActive: true });
-    }
-
-    config[field] = enabled !== undefined ? enabled : !config[field];
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        method,
-        enabled: config[field],
-      },
-      message: `${method} ${config[field] ? "enabled" : "disabled"} successfully`,
-    });
-  } catch (error) {
-    console.error("Error toggling payment method:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
 // ==================== UPDATE INTEGRATION NAMES ====================
 
 /**
  * Update integration names for payment methods
- * PUT /api/v2/admin/paymob-config/integrations
+ * PUT /api/v2/paymob-config/integrations
  */
 export const updateIntegrationNames = async (req, res) => {
   try {
@@ -267,9 +184,6 @@ export const updateIntegrationNames = async (req, res) => {
       kioskIntegrationName,
       installmentsIntegrationName,
       valuIntegrationName,
-      souhoolaIntegrationName,
-      symplIntegrationName,
-      applePayIntegrationName,
     } = req.body;
 
     let config = await PaymobConfig.findOne({ isActive: true });
@@ -284,9 +198,6 @@ export const updateIntegrationNames = async (req, res) => {
     if (kioskIntegrationName) config.kioskIntegrationName = kioskIntegrationName;
     if (installmentsIntegrationName) config.installmentsIntegrationName = installmentsIntegrationName;
     if (valuIntegrationName) config.valuIntegrationName = valuIntegrationName;
-    if (souhoolaIntegrationName) config.souhoolaIntegrationName = souhoolaIntegrationName;
-    if (symplIntegrationName) config.symplIntegrationName = symplIntegrationName;
-    if (applePayIntegrationName) config.applePayIntegrationName = applePayIntegrationName;
 
     await config.save();
 
@@ -298,9 +209,6 @@ export const updateIntegrationNames = async (req, res) => {
         kioskIntegrationName: config.kioskIntegrationName,
         installmentsIntegrationName: config.installmentsIntegrationName,
         valuIntegrationName: config.valuIntegrationName,
-        souhoolaIntegrationName: config.souhoolaIntegrationName,
-        symplIntegrationName: config.symplIntegrationName,
-        applePayIntegrationName: config.applePayIntegrationName,
       },
       message: "Integration names updated successfully",
     });
@@ -313,52 +221,17 @@ export const updateIntegrationNames = async (req, res) => {
   }
 };
 
-// ==================== SYNC WITH PAYMOB ====================
-
-/**
- * Sync configuration with Paymob dashboard (placeholder)
- * POST /api/v2/admin/paymob-config/sync
- */
-export const syncWithPaymob = async (req, res) => {
-  try {
-    let config = await PaymobConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await PaymobConfig.create({ isActive: true });
-    }
-
-    // TODO: Implement actual sync with Paymob API
-    // This would fetch available integrations from Paymob dashboard
-
-    config.lastSyncedAt = new Date();
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: config,
-      message: "Configuration synced with Paymob",
-    });
-  } catch (error) {
-    console.error("Error syncing with Paymob:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
 
 // ==================== RESET TO DEFAULTS ====================
 
 /**
  * Reset Paymob configuration to defaults
- * POST /api/v2/admin/paymob-config/reset
+ * POST /api/v2/paymob-config/reset
  */
 export const resetPaymobConfig = async (req, res) => {
   try {
-    // Delete existing config
     await PaymobConfig.deleteMany({});
 
-    // Create new default config
     const config = await PaymobConfig.create({
       isActive: true,
       isLiveMode: false,
@@ -378,12 +251,40 @@ export const resetPaymobConfig = async (req, res) => {
   }
 };
 
+// ==================== GET WEBHOOK INFO ====================
+
+/**
+ * Get webhook configuration info
+ * GET /api/v2/paymob-config/webhooks
+ */
+export const getWebhookInfo = async (req, res) => {
+  try {
+    const config = await PaymobConfig.findOne({ isActive: true });
+    const baseUrl = process.env.BASE_URL || process.env.API_URL;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        webhookUrl: `${baseUrl}/api/v2/webhooks/paymob`,
+        secretConfigured: !!process.env.PAYMOB_HMAC_SECRET,
+        redirectUrl: config?.customRedirectUrl || `${process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL}/payment-redirect`,
+        transactionExpiration: config?.transactionExpirationMinutes || 30,
+      },
+      message: "Webhook info fetched successfully",
+    });
+  } catch (error) {
+    console.error("Error fetching webhook info:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export default {
   getPaymobConfig,
   updatePaymobConfig,
-  getEnabledPaymentMethods,
-  togglePaymentMethod,
   updateIntegrationNames,
-  syncWithPaymob,
   resetPaymobConfig,
+  getWebhookInfo,
 };

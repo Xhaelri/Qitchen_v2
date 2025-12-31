@@ -24,6 +24,12 @@ import {
   processRefund,
 } from "../services/paymentStrategy.service.js";
 
+// ✅ IMPORT DISCOUNT HELPERS
+import {
+  calculateFinalCartPrice,
+  calculateProductPrice,
+} from "../helpers/discount.helpers.js";
+
 import StripeService from "../services/stripe.service.js";
 import PaymobService from "../services/paymob.service.js";
 
@@ -75,8 +81,7 @@ const buildOrderData = ({
   address: addressId,
   placeType,
   table: tableId || null,
-  deliveryLocation:
-    placeType === "Online" ? { governorate, city } : undefined,
+  deliveryLocation: placeType === "Online" ? { governorate, city } : undefined,
 });
 
 /**
@@ -165,9 +170,9 @@ const getConfigForPaymentMethod = async (paymentMethod) => {
 // ==================== UNIFIED ORDER CREATION ====================
 
 /**
- * Create order from cart (supports all payment methods)
+ * ✅ FIXED: Create order from cart (supports all payment methods)
  * POST /orders/cart/:cartId/:addressId
- * 
+ *
  * @body {string} placeType - "Online" | "In-Place" | "Takeaway"
  * @body {string} tableId - Required if placeType is "In-Place"
  * @body {string} paymentMethod - "Card" | "Paymob-Card" | "Paymob-Wallet" | "COD" | etc.
@@ -214,7 +219,17 @@ export const createOrderFromCart = async (req, res) => {
     }
 
     const cart = cartResult.data;
-    const subtotal = cart.totalPrice;
+
+    // ✅ RECALCULATE PRICES WITH CURRENT DISCOUNTS
+    const cartCalculation = await calculateFinalCartPrice(
+      cart.products,
+      cart.appliedCoupon || null,
+      userId
+    );
+
+    const subtotal = cartCalculation.finalTotal;
+    const productDiscounts = cartCalculation.totalDiscount;
+    const couponDiscount = cartCalculation.couponDiscount;
 
     // Calculate delivery fee
     const deliveryResult = await calculateDeliveryFeeSafe({
@@ -235,7 +250,10 @@ export const createOrderFromCart = async (req, res) => {
     const totalPrice = subtotal + deliveryFee;
 
     // Validate order amount against provider-specific config
-    const amountResult = await validateOrderAmountWithConfig(totalPrice, paymentMethod);
+    const amountResult = await validateOrderAmountWithConfig(
+      totalPrice,
+      paymentMethod
+    );
     if (!amountResult.success) {
       return res.status(amountResult.statusCode).json({
         success: false,
@@ -264,10 +282,12 @@ export const createOrderFromCart = async (req, res) => {
       })
     );
 
-    // Build products array for payment processing
-    const productsForPayment = cart.products.map((item) => ({
+    // Build products array for payment processing (with recalculated prices)
+    const productsForPayment = cartCalculation.itemsWithPrices.map((item) => ({
       product: item.product,
       quantity: item.quantity,
+      unitPrice: item.unitPrice, // Effective price after all discounts
+      originalPrice: item.originalUnitPrice,
     }));
 
     // Get customer email for receipts
@@ -285,7 +305,12 @@ export const createOrderFromCart = async (req, res) => {
         governorate,
         city,
         customerEmail,
-        metadata: { cartId, source: "cart" },
+        metadata: { 
+          cartId, 
+          source: "cart",
+          productDiscounts,
+          couponDiscount,
+        },
       })
     );
 
@@ -301,10 +326,25 @@ export const createOrderFromCart = async (req, res) => {
       });
     }
 
+    // Clear cart on successful payment
+    if (paymentResult.success) {
+      cart.products = [];
+      cart.totalPrice = 0;
+      cart.totalQuantity = 0;
+      cart.appliedCoupon = null;
+      cart.couponDiscount = 0;
+      cart.totalDiscount = 0;
+      cart.subtotal = 0;
+
+      await cart.save();
+    }
+
     // Get populated order
     const populatedOrder = await populateOrder(order._id);
 
-    return res.status(201).json(formatOrderResponse(populatedOrder, paymentResult));
+    return res
+      .status(201)
+      .json(formatOrderResponse(populatedOrder, paymentResult));
   } catch (error) {
     console.error("Error in createOrderFromCart:", error);
     return res.status(500).json({ success: false, message: error.message });
@@ -312,7 +352,7 @@ export const createOrderFromCart = async (req, res) => {
 };
 
 /**
- * Create order for single product (supports all payment methods)
+ * ✅ FIXED: Create order for single product (supports all payment methods)
  * POST /orders/product/:productId/:addressId
  */
 export const createOrderFromProduct = async (req, res) => {
@@ -356,7 +396,17 @@ export const createOrderFromProduct = async (req, res) => {
     }
 
     const product = productResult.data;
-    const subtotal = product.price * quantity;
+
+    // ✅ CALCULATE PRICE WITH CURRENT DISCOUNTS
+    const priceInfo = await calculateProductPrice(product);
+    const effectivePrice = priceInfo.price;
+    const originalPrice = priceInfo.originalPrice;
+    const discount = priceInfo.discount;
+    const discountPercentage = priceInfo.discountPercentage;
+    const discountType = priceInfo.discountType;
+
+    const subtotal = effectivePrice * quantity;
+    const totalDiscount = discount * quantity;
 
     // Calculate delivery fee
     const deliveryResult = await calculateDeliveryFeeSafe({
@@ -377,7 +427,10 @@ export const createOrderFromProduct = async (req, res) => {
     const totalPrice = subtotal + deliveryFee;
 
     // Validate order amount against provider-specific config
-    const amountResult = await validateOrderAmountWithConfig(totalPrice, paymentMethod);
+    const amountResult = await validateOrderAmountWithConfig(
+      totalPrice,
+      paymentMethod
+    );
     if (!amountResult.success) {
       return res.status(amountResult.statusCode).json({
         success: false,
@@ -403,8 +456,16 @@ export const createOrderFromProduct = async (req, res) => {
       })
     );
 
-    // Build products array for payment processing
-    const productsForPayment = [{ product, quantity }];
+    // Build products array for payment processing (with calculated prices)
+    const productsForPayment = [{
+      product,
+      quantity,
+      unitPrice: effectivePrice,
+      originalPrice,
+      discount,
+      discountPercentage,
+      discountType,
+    }];
 
     // Get customer email for receipts
     const customerEmail = req.user?.email;
@@ -421,7 +482,12 @@ export const createOrderFromProduct = async (req, res) => {
         governorate,
         city,
         customerEmail,
-        metadata: { productId, source: "single-product" },
+        metadata: { 
+          productId, 
+          source: "single-product",
+          discount: totalDiscount,
+          discountType,
+        },
       })
     );
 
@@ -440,7 +506,9 @@ export const createOrderFromProduct = async (req, res) => {
     // Get populated order
     const populatedOrder = await populateOrder(order._id);
 
-    return res.status(201).json(formatOrderResponse(populatedOrder, paymentResult));
+    return res
+      .status(201)
+      .json(formatOrderResponse(populatedOrder, paymentResult));
   } catch (error) {
     console.error("Error in createOrderFromProduct:", error);
     return res.status(500).json({ success: false, message: error.message });
@@ -448,7 +516,7 @@ export const createOrderFromProduct = async (req, res) => {
 };
 
 /**
- * Create order for multiple products (supports all payment methods)
+ * ✅ FIXED: Create order for multiple products (supports all payment methods)
  * POST /orders/products/:addressId
  */
 export const createOrderFromProducts = async (req, res) => {
@@ -491,7 +559,35 @@ export const createOrderFromProducts = async (req, res) => {
       });
     }
 
-    const { enrichedProducts, subtotal, totalQuantity } = productsResult.data;
+    const { enrichedProducts, totalQuantity } = productsResult.data;
+
+    // ✅ CALCULATE PRICES WITH CURRENT DISCOUNTS FOR EACH PRODUCT
+    let subtotal = 0;
+    let totalDiscount = 0;
+    const itemsWithPrices = [];
+
+    for (const item of enrichedProducts) {
+      const priceInfo = await calculateProductPrice(item.productData);
+      
+      const effectivePrice = priceInfo.price;
+      const itemTotal = effectivePrice * item.quantity;
+      const itemDiscount = priceInfo.discount * item.quantity;
+
+      subtotal += itemTotal;
+      totalDiscount += itemDiscount;
+
+      itemsWithPrices.push({
+        product: item.productData,
+        quantity: item.quantity,
+        unitPrice: effectivePrice,
+        originalPrice: priceInfo.originalPrice,
+        discount: priceInfo.discount,
+        discountPercentage: priceInfo.discountPercentage,
+        discountType: priceInfo.discountType,
+        itemTotal,
+        itemDiscount,
+      });
+    }
 
     // Calculate delivery fee
     const deliveryResult = await calculateDeliveryFeeSafe({
@@ -512,7 +608,10 @@ export const createOrderFromProducts = async (req, res) => {
     const totalPrice = subtotal + deliveryFee;
 
     // Validate order amount against provider-specific config
-    const amountResult = await validateOrderAmountWithConfig(totalPrice, paymentMethod);
+    const amountResult = await validateOrderAmountWithConfig(
+      totalPrice,
+      paymentMethod
+    );
     if (!amountResult.success) {
       return res.status(amountResult.statusCode).json({
         success: false,
@@ -541,10 +640,15 @@ export const createOrderFromProducts = async (req, res) => {
       })
     );
 
-    // Build products array for payment processing (with full product data)
-    const productsForPayment = enrichedProducts.map((item) => ({
-      product: item.productData,
+    // Build products array for payment processing (with calculated prices)
+    const productsForPayment = itemsWithPrices.map((item) => ({
+      product: item.product,
       quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      originalPrice: item.originalPrice,
+      discount: item.discount,
+      discountPercentage: item.discountPercentage,
+      discountType: item.discountType,
     }));
 
     // Get customer email for receipts
@@ -562,7 +666,10 @@ export const createOrderFromProducts = async (req, res) => {
         governorate,
         city,
         customerEmail,
-        metadata: { source: "multiple-products" },
+        metadata: { 
+          source: "multiple-products",
+          totalDiscount,
+        },
       })
     );
 
@@ -581,7 +688,9 @@ export const createOrderFromProducts = async (req, res) => {
     // Get populated order
     const populatedOrder = await populateOrder(order._id);
 
-    return res.status(201).json(formatOrderResponse(populatedOrder, paymentResult));
+    return res
+      .status(201)
+      .json(formatOrderResponse(populatedOrder, paymentResult));
   } catch (error) {
     console.error("Error in createOrderFromProducts:", error);
     return res.status(500).json({ success: false, message: error.message });
@@ -601,7 +710,9 @@ export const getOrderDetails = async (req, res) => {
       .populate("paymentMethod");
 
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     return res.status(200).json({
@@ -634,7 +745,9 @@ export const getAllOrdersForUser = async (req, res) => {
     const totalOrders = await Order.countDocuments({ buyer: userId });
 
     if (!orders.length) {
-      return res.status(404).json({ success: false, message: "No orders found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "No orders found" });
     }
 
     return res.status(200).json({
@@ -674,7 +787,9 @@ export const getCurrentUserOrders = async (req, res) => {
     const totalOrders = await Order.countDocuments({ buyer: userId });
 
     if (!orders.length) {
-      return res.status(404).json({ success: false, message: "No orders found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "No orders found" });
     }
 
     return res.status(200).json({
@@ -737,11 +852,93 @@ export const getAllOrders = async (req, res) => {
 
 // ==================== ORDER STATUS MANAGEMENT ====================
 
+/**
+ * Update payment status (Admin only)
+ * PATCH /orders/:orderId/payment-status
+ */
+export const updatePaymentStatusForCOD = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { paymentStatus } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
+    // ✅ Get valid statuses from model schema
+    const validStatuses = Order.schema.path('paymentStatus').enumValues;
+
+    if (!paymentStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment status is required",
+        validStatuses,
+      });
+    }
+
+    if (!validStatuses.includes(paymentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid payment status`,
+        validStatuses,
+      });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const oldStatus = order.paymentStatus;
+
+    // Update payment status
+    order.paymentStatus = paymentStatus;
+
+    // Auto-update order status for common cases
+    if (paymentStatus === "Completed" && order.orderStatus === "Processing") {
+      order.orderStatus = "Paid";
+    } else if (paymentStatus === "Failed") {
+      order.orderStatus = "Failed";
+    } else if (paymentStatus === "Cancelled") {
+      order.orderStatus = "Cancelled";
+    }
+
+    await order.save();
+
+    const populatedOrder = await Order.findById(orderId)
+      .populate("products.product")
+      .populate("address")
+      .populate("buyer", "-password -__v -refreshToken")
+      .populate("table")
+      .populate("paymentMethod");
+
+    return res.status(200).json({
+      success: true,
+      data: populatedOrder,
+      message: `Payment status updated from ${oldStatus} to ${paymentStatus}`,
+    });
+  } catch (error) {
+    console.error("Error in updatePaymentStatus:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order id is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order id is required" });
     }
 
     const allowedFields = ["orderStatus"];
@@ -751,7 +948,9 @@ export const updateOrderStatus = async (req, res) => {
     });
 
     if (!Object.keys(changes).length) {
-      return res.status(400).json({ success: false, message: "orderStatus field is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "orderStatus field is required" });
     }
 
     const updatedOrderStatus = await Order.findByIdAndUpdate(orderId, changes, {
@@ -771,32 +970,22 @@ export const updateOrderStatus = async (req, res) => {
 
 export const getOrdersByOrderStatus = async (req, res) => {
   try {
-    const { page = 1, limit = 10, orderStatus } = req.query;
+    const { page = 1, limit = 10 } = req.query;
+    const { status } = req.params;
+
     const pageNum = parseInt(page, 10);
-    const limitNum = parseInt(limit);
+    const limitNum = parseInt(limit, 10);
 
-    if (pageNum < 1 || limitNum < 1) {
+    if (!status) {
       return res.status(400).json({
         success: false,
-        message: "Page and limit must be positive numbers",
+        message: "Order status is required",
       });
     }
 
-    if (!orderStatus) {
-      return res.status(400).json({
-        success: false,
-        message: "At least 1 order status required!",
-      });
-    }
-
-    const statuses =
-      typeof orderStatus === "string"
-        ? orderStatus.includes(",")
-          ? orderStatus.split(",").map((s) => s.trim())
-          : [orderStatus.trim()]
-        : Array.isArray(orderStatus)
-        ? orderStatus
-        : [];
+    const statuses = status.includes(",")
+      ? status.split(",").map((s) => s.trim())
+      : [status.trim()];
 
     const validOrderStatuses = [
       "Processing",
@@ -809,51 +998,47 @@ export const getOrdersByOrderStatus = async (req, res) => {
     ];
 
     const invalidStatuses = statuses.filter(
-      (status) => !validOrderStatuses.includes(status)
+      (s) => !validOrderStatuses.includes(s)
     );
 
-    if (invalidStatuses.length > 0) {
+    if (invalidStatuses.length) {
       return res.status(400).json({
         success: false,
-        message: `Invalid statuses: ${invalidStatuses.join(", ")}. Valid statuses are: ${validOrderStatuses.join(", ")}`,
+        message: `Invalid statuses: ${invalidStatuses.join(", ")}`,
       });
     }
 
     const skip = (pageNum - 1) * limitNum;
+
     const totalOrders = await Order.countDocuments({
       orderStatus: { $in: statuses },
     });
 
-    const statusesData = await Promise.all(
-      statuses.map(async (status) => {
-        const orders = await Order.find({ orderStatus: status })
+    const data = await Promise.all(
+      statuses.map(async (s) => ({
+        status: s,
+        orders: await Order.find({ orderStatus: s })
           .populate("products.product")
           .populate("address")
-          .populate("buyer", "-password -__v -refreshToken")
+          .populate("buyer", "-password -refreshToken")
           .populate("table")
           .populate("paymentMethod")
           .skip(skip)
           .limit(limitNum)
-          .sort({ createdAt: -1 });
-
-        return { status, orders };
-      })
+          .sort({ createdAt: -1 }),
+      }))
     );
 
     return res.status(200).json({
       success: true,
-      data: statusesData,
+      data,
       pagination: {
         currentPage: pageNum,
         totalPages: Math.ceil(totalOrders / limitNum),
         totalOrders,
-        hasNextPage: pageNum * limitNum < totalOrders,
-        hasPrevPage: pageNum > 1,
       },
-      message: "Orders fetched successfully by status",
     });
   } catch (error) {
-    console.error("Error in getOrdersByOrderStatus:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -864,20 +1049,26 @@ export const updateOrderPlaceType = async (req, res) => {
     const { placeType, tableId } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     const validPlaceTypes = ["Online", "In-Place", "Takeaway"];
     if (!placeType || !validPlaceTypes.includes(placeType)) {
       return res.status(400).json({
         success: false,
-        message: `Invalid placeType. Valid types: ${validPlaceTypes.join(", ")}`,
+        message: `Invalid placeType. Valid types: ${validPlaceTypes.join(
+          ", "
+        )}`,
       });
     }
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     if (placeType === "In-Place") {
@@ -926,7 +1117,7 @@ export const updateOrderPlaceType = async (req, res) => {
 /**
  * Refund an order (supports all payment methods)
  * POST /orders/:orderId/refund
- * 
+ *
  * @body {number} refundAmount - Amount to refund (optional, defaults to full amount)
  * @body {string} refundReason - Reason for refund
  */
@@ -936,13 +1127,17 @@ export const refundOrder = async (req, res) => {
     const { refundAmount, refundReason } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     // Get order with payment method populated
     const order = await Order.findById(orderId).populate("paymentMethod");
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     // Validate payment status
@@ -1000,15 +1195,17 @@ export const refundOrder = async (req, res) => {
     // Update order status
     const isPartialRefund = amountToRefund < order.totalPrice;
     order.paymentStatus = isPartialRefund ? "PartiallyRefunded" : "Refunded";
-    
+
     order.refundDetails = {
       refundId: refundResult.refundId,
       refundAmount: amountToRefund,
       refundDate: new Date(),
       refundReason: refundReason || "Customer requested refund",
-      refundStatus: refundResult.status === "succeeded" || refundResult.status === "completed" 
-        ? "Completed" 
-        : "Pending",
+      refundStatus:
+        refundResult.status === "succeeded" ||
+        refundResult.status === "completed"
+          ? "Completed"
+          : "Pending",
     };
 
     await order.save();
@@ -1024,7 +1221,11 @@ export const refundOrder = async (req, res) => {
           provider: refundResult.provider,
         },
       },
-      message: refundResult.message || `${isPartialRefund ? "Partial refund" : "Full refund"} processed successfully`,
+      message:
+        refundResult.message ||
+        `${
+          isPartialRefund ? "Partial refund" : "Full refund"
+        } processed successfully`,
     });
   } catch (error) {
     console.error("Error in refundOrder:", error);
@@ -1035,7 +1236,7 @@ export const refundOrder = async (req, res) => {
 /**
  * Cancel an order (supports all payment methods with auto-refund based on config)
  * POST /orders/:orderId/cancel
- * 
+ *
  * @body {string} cancellationReason - Reason for cancellation
  */
 export const cancelOrder = async (req, res) => {
@@ -1044,13 +1245,17 @@ export const cancelOrder = async (req, res) => {
     const { cancellationReason } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     // Get order with payment method populated
     const order = await Order.findById(orderId).populate("paymentMethod");
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     // Check if already cancelled
@@ -1069,7 +1274,7 @@ export const cancelOrder = async (req, res) => {
     // Handle cancellation based on payment provider and status
     if (provider === "stripe" && order.stripeSessionID) {
       refundResult = await StripeService.handleOrderCancellation(order);
-      
+
       if (refundResult.success) {
         if (order.paymentStatus === "Completed" && refundResult.refundId) {
           order.paymentStatus = "Refunded";
@@ -1088,9 +1293,14 @@ export const cancelOrder = async (req, res) => {
       } else {
         refundMessage = ` (${refundResult.message})`;
       }
-    } else if (provider === "paymob" && (order.paymobPaymentId || order.paymobIntentionId || order.paymobTransactionId)) {
+    } else if (
+      provider === "paymob" &&
+      (order.paymobPaymentId ||
+        order.paymobIntentionId ||
+        order.paymobTransactionId)
+    ) {
       refundResult = await PaymobService.handleOrderCancellation(order);
-      
+
       if (refundResult.success) {
         if (order.paymentStatus === "Completed" && refundResult.refundId) {
           order.paymentStatus = "Refunded";
@@ -1155,12 +1365,16 @@ export const getPaymentStatus = async (req, res) => {
     const { orderId } = req.params;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     const order = await Order.findById(orderId).populate("paymentMethod");
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     const paymentMethodName = order.paymentMethod?.name;
@@ -1178,7 +1392,9 @@ export const getPaymentStatus = async (req, res) => {
 
     // Get provider-specific details
     if (provider === "stripe" && order.stripeSessionID) {
-      const stripeDetails = await StripeService.getPaymentDetails(order.stripeSessionID);
+      const stripeDetails = await StripeService.getPaymentDetails(
+        order.stripeSessionID
+      );
       if (stripeDetails.success) {
         paymentDetails.providerDetails = stripeDetails.data;
       }
@@ -1189,10 +1405,12 @@ export const getPaymentStatus = async (req, res) => {
         paymentId: order.paymobPaymentId,
         transactionId: order.paymobTransactionId,
       };
-      
+
       // Get transaction details if we have a transaction ID
       if (order.paymobTransactionId) {
-        const paymobDetails = await PaymobService.getTransaction(order.paymobTransactionId);
+        const paymobDetails = await PaymobService.getTransaction(
+          order.paymobTransactionId
+        );
         if (paymobDetails.success) {
           paymentDetails.providerDetails.transaction = paymobDetails.data;
         }
@@ -1220,7 +1438,7 @@ export const getPaymentStatus = async (req, res) => {
 /**
  * Capture a previously authorized payment
  * POST /orders/:orderId/capture
- * 
+ *
  * @body {number} amount - Amount to capture (optional, defaults to full amount)
  */
 export const capturePayment = async (req, res) => {
@@ -1229,12 +1447,16 @@ export const capturePayment = async (req, res) => {
     const { amount } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     const order = await Order.findById(orderId).populate("paymentMethod");
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     const paymentMethodName = order.paymentMethod?.name;
@@ -1255,7 +1477,8 @@ export const capturePayment = async (req, res) => {
       captureResult = await StripeService.capturePayment(order, amount);
     } else if (provider === "paymob") {
       // Paymob capture
-      const transactionId = order.paymobTransactionId || order.paymobData?.obj?.id;
+      const transactionId =
+        order.paymobTransactionId || order.paymobData?.obj?.id;
       if (!transactionId) {
         return res.status(400).json({
           success: false,
@@ -1263,8 +1486,13 @@ export const capturePayment = async (req, res) => {
         });
       }
 
-      const amountCents = amount ? Math.round(amount * 100) : Math.round(order.totalPrice * 100);
-      captureResult = await PaymobService.captureTransaction(transactionId, amountCents);
+      const amountCents = amount
+        ? Math.round(amount * 100)
+        : Math.round(order.totalPrice * 100);
+      captureResult = await PaymobService.captureTransaction(
+        transactionId,
+        amountCents
+      );
     } else {
       return res.status(400).json({
         success: false,
@@ -1310,15 +1538,19 @@ export const retryPayment = async (req, res) => {
     const { paymentMethod } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID is required" });
     }
 
     const order = await Order.findById(orderId)
       .populate("paymentMethod")
       .populate("products.product");
-      
+
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     // Only allow retry for failed or cancelled payments
@@ -1339,7 +1571,10 @@ export const retryPayment = async (req, res) => {
     }
 
     // Validate order amount
-    const amountResult = await validateOrderAmountWithConfig(order.totalPrice, methodToUse);
+    const amountResult = await validateOrderAmountWithConfig(
+      order.totalPrice,
+      methodToUse
+    );
     if (!amountResult.success) {
       return res.status(amountResult.statusCode).json({
         success: false,
@@ -1386,38 +1621,39 @@ export const retryPayment = async (req, res) => {
 
     const populatedOrder = await populateOrder(order._id);
 
-    return res.status(200).json(formatOrderResponse(populatedOrder, paymentResult));
+    return res
+      .status(200)
+      .json(formatOrderResponse(populatedOrder, paymentResult));
   } catch (error) {
     console.error("Error in retryPayment:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-
 export default {
   // Order creation
   createOrderFromCart,
   createOrderFromProduct,
   createOrderFromProducts,
-  
+
   // Order retrieval
   getOrderDetails,
   getAllOrdersForUser,
   getCurrentUserOrders,
   getAllOrders,
-  
+
   // Order status management
+  updatePaymentStatusForCOD,
   updateOrderStatus,
   getOrdersByOrderStatus,
   updateOrderPlaceType,
-  
+
   // Refunds & Cancellation
   refundOrder,
   cancelOrder,
-  
+
   // Payment operations
   getPaymentStatus,
   capturePayment,
   retryPayment,
-  
 };

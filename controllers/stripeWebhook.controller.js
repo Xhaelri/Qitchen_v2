@@ -1,3 +1,4 @@
+// stripeWebhook.controller.js
 import Stripe from "stripe";
 import express from "express";
 import Order from "../models/order.model.js";
@@ -21,7 +22,6 @@ const fulfillCheckout = async (sessionId) => {
     });
 
     const orderId = checkoutSession.metadata?.orderId;
-    const cartId = checkoutSession.metadata?.cartId;
 
     if (!orderId) {
       console.log(
@@ -31,7 +31,7 @@ const fulfillCheckout = async (sessionId) => {
       throw new Error("No orderId found in session metadata");
     }
 
-    console.log(`Processing order: ${orderId}, cart: ${cartId}`);
+    console.log(`Processing order: ${orderId}`);
 
     const order = await Order.findById(orderId);
     if (!order) {
@@ -56,65 +56,60 @@ const fulfillCheckout = async (sessionId) => {
       return;
     }
 
-    let updateData = {};
-
     if (checkoutSession.payment_status === "paid") {
-      updateData = {
-        paymentStatus: "Completed",
-        orderStatus: "Paid",
-        stripeSessionID: sessionId,
-      };
+      // Update order status
+      order.paymentStatus = "Completed";
+      order.orderStatus = "Paid";
+      order.stripeSessionID = sessionId;
+      order.stripePaymentIntentId = checkoutSession.payment_intent;
+      await order.save();
 
-      console.log(`Updating order ${orderId} to completed status`);
-
-      const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
-        new: true,
-      });
-      console.log(`Order updated:`, {
-        orderId: updatedOrder._id,
-        paymentStatus: updatedOrder.paymentStatus,
-        orderStatus: updatedOrder.orderStatus,
+      console.log(`Order ${orderId} updated:`, {
+        paymentStatus: order.paymentStatus,
+        orderStatus: order.orderStatus,
       });
 
-      if (cartId) {
-        const deletedCart = await Cart.findByIdAndDelete(cartId);
-        if (deletedCart) {
-          console.log(`Cart ${cartId} cleared successfully`);
+      // ✅ FIXED: Find cart by user, not by cartId
+      try {
+        const cart = await Cart.findOne({ owner: order.buyer });
+        if (cart && cart.products.length > 0) {
+          cart.products = [];
+          cart.totalPrice = 0;
+          cart.totalQuantity = 0;
+          await cart.save();
+          console.log(`Cart cleared for user ${order.buyer} after Stripe payment`);
         } else {
-          console.log(`Cart ${cartId} not found or already deleted`);
+          console.log(`No cart found or cart already empty for user ${order.buyer}`);
         }
+      } catch (cartError) {
+        console.error(`Error clearing cart for user ${order.buyer}:`, cartError);
+        // Don't throw - order is already paid, cart clearing is secondary
       }
 
       console.log(`Order ${orderId} payment completed successfully`);
+
     } else if (checkoutSession.payment_status === "unpaid") {
-      updateData = {
-        paymentStatus: "Failed",
-        orderStatus: "Failed",
-        stripeSessionID: sessionId,
-      };
+      order.paymentStatus = "Failed";
+      order.orderStatus = "Failed";
+      order.stripeSessionID = sessionId;
+      await order.save();
 
-      const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
-        new: true,
-      });
       console.log(`Order ${orderId} marked as failed due to unpaid status`, {
-        paymentStatus: updatedOrder.paymentStatus,
-        orderStatus: updatedOrder.orderStatus,
+        paymentStatus: order.paymentStatus,
+        orderStatus: order.orderStatus,
       });
-    } else {
-      updateData = {
-        paymentStatus: "Failed",
-        orderStatus: "Failed",
-        stripeSessionID: sessionId,
-      };
 
-      const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
-        new: true,
-      });
+    } else {
+      order.paymentStatus = "Failed";
+      order.orderStatus = "Failed";
+      order.stripeSessionID = sessionId;
+      await order.save();
+
       console.log(
         `Order ${orderId} marked as failed due to payment status: ${checkoutSession.payment_status}`,
         {
-          paymentStatus: updatedOrder.paymentStatus,
-          orderStatus: updatedOrder.orderStatus,
+          paymentStatus: order.paymentStatus,
+          orderStatus: order.orderStatus,
         }
       );
     }
@@ -160,14 +155,14 @@ export const webhook = async (request, response) => {
         const failedOrderId = failedSession.metadata?.orderId;
 
         if (failedOrderId) {
-          const updatedOrder = await Order.findByIdAndUpdate(
-            failedOrderId,
-            {
-              paymentStatus: "Failed",
-              orderStatus: "Failed",
-            },
-            { new: true }
-          );
+          const order = await Order.findById(failedOrderId);
+          if (order) {
+            order.paymentStatus = "Failed";
+            order.orderStatus = "Failed";
+            order.stripeSessionID = failedSession.id;
+            await order.save();
+            console.log(`Order ${failedOrderId} marked as failed`);
+          }
         } else {
           console.log("No orderId found in failed session metadata");
         }

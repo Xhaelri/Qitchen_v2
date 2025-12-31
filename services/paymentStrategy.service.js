@@ -1,3 +1,5 @@
+// paymentStrategy.service.js
+// ✅ Activation is checked in validatePaymentMethod() before reaching here
 import Stripe from "stripe";
 import Order from "../models/order.model.js";
 import StripeConfig from "../models/stripeConfig.model.js";
@@ -13,48 +15,22 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
  * All payment strategies must implement processPayment method
  */
 class PaymentStrategy {
-  /**
-   * Process payment for an order
-   * @param {Object} order - The order document
-   * @param {Object} context - Additional context (req, products, etc.)
-   * @returns {Promise<PaymentResult>}
-   */
   async processPayment(order, context) {
     throw new Error("processPayment must be implemented by subclass");
   }
 
-  /**
-   * Process refund for an order
-   * @param {Object} order - The order document
-   * @param {number} amount - Amount to refund
-   * @param {string} reason - Refund reason
-   * @returns {Promise<RefundResult>}
-   */
   async processRefund(order, amount, reason) {
     throw new Error("processRefund must be implemented by subclass");
   }
 
-  /**
-   * Void/Cancel a pending transaction
-   * @param {Object} order - The order document
-   * @returns {Promise<VoidResult>}
-   */
   async voidTransaction(order) {
     throw new Error("voidTransaction must be implemented by subclass");
   }
 
-  /**
-   * Get the provider name
-   * @returns {string}
-   */
   getProviderName() {
     throw new Error("getProviderName must be implemented by subclass");
   }
 
-  /**
-   * Get provider-specific config
-   * @returns {Promise<Object>}
-   */
   async getConfig() {
     throw new Error("getConfig must be implemented by subclass");
   }
@@ -79,6 +55,21 @@ class StripePaymentStrategy extends PaymentStrategy {
   async processPayment(order, context) {
     const { products, deliveryFee, frontendUrl, userId, metadata = {} } = context;
 
+    // ✅ No activation check needed - already done in validatePaymentMethod()
+    // Just validate amount against provider limits
+    const config = await this.getConfig();
+    if (config) {
+      const amountValidation = await StripeConfig.validateOrderAmount(order.totalPrice);
+      if (!amountValidation.success) {
+        return {
+          success: false,
+          provider: this.getProviderName(),
+          redirectUrl: null,
+          message: amountValidation.message,
+        };
+      }
+    }
+
     // Use StripeService for checkout session creation
     const result = await StripeService.createCheckoutSession(order, {
       products,
@@ -102,12 +93,12 @@ class StripePaymentStrategy extends PaymentStrategy {
 }
 
 /**
- * Paymob Payment Strategy (Card & Wallet)
+ * Paymob Payment Strategy (Card, Wallet, Kiosk, etc.)
  */
 class PaymobPaymentStrategy extends PaymentStrategy {
   constructor(paymentType) {
     super();
-    this.paymentType = paymentType; // 'Paymob-Card' or 'Paymob-Wallet'
+    this.paymentType = paymentType;
   }
 
   getProviderName() {
@@ -122,27 +113,14 @@ class PaymobPaymentStrategy extends PaymentStrategy {
     const { req, paymentMethod } = context;
     const config = await this.getConfig();
 
-    // Check if payment method is enabled in config
+    // ✅ No activation check needed - already done in validatePaymentMethod()
+    // Just validate amount against provider limits
     if (config) {
-      const isEnabled = await PaymobConfig.isPaymentMethodEnabled(
-        paymentMethod || this.paymentType
-      );
-      
-      if (!isEnabled) {
-        return {
-          success: false,
-          provider: this.getProviderName(),
-          redirectUrl: null,
-          message: `${paymentMethod || this.paymentType} is currently disabled`,
-        };
-      }
-
-      // Validate order amount against Paymob config
       const amountValidation = await PaymobConfig.validateOrderAmount(
         order.totalPrice,
         paymentMethod || this.paymentType
       );
-      
+
       if (!amountValidation.success) {
         return {
           success: false,
@@ -197,7 +175,7 @@ class PaymobPaymentStrategy extends PaymentStrategy {
       // Call Paymob refund API
       const result = await PaymobService.refundTransaction(
         order.paymobTransactionId || order.paymobData?.obj?.id,
-        Math.round(amount * 100) // Amount in cents
+        Math.round(amount * 100)
       );
 
       if (!result.success) {
@@ -234,9 +212,8 @@ class PaymobPaymentStrategy extends PaymentStrategy {
         };
       }
 
-      // Call Paymob void API
       const transactionId = order.paymobTransactionId || order.paymobData?.obj?.id;
-      
+
       if (!transactionId) {
         return {
           success: false,
@@ -277,13 +254,13 @@ class CODPaymentStrategy extends PaymentStrategy {
   }
 
   async getConfig() {
-    // COD uses general StripeConfig for order limits
+    // COD uses StripeConfig for general order limits
     return StripeConfig.findOne({ isActive: true });
   }
 
   async processPayment(order, context) {
+    // ✅ No activation check needed - already done in validatePaymentMethod()
     // COD doesn't require any external payment processing
-    // Order is already created with Pending payment status
     return {
       success: true,
       provider: this.getProviderName(),
@@ -321,9 +298,6 @@ const paymentStrategies = {
   "Paymob-Kiosk": new PaymobPaymentStrategy("Paymob-Kiosk"),
   "Paymob-Installments": new PaymobPaymentStrategy("Paymob-Installments"),
   "Paymob-ValU": new PaymobPaymentStrategy("Paymob-ValU"),
-  "Paymob-Souhoola": new PaymobPaymentStrategy("Paymob-Souhoola"),
-  "Paymob-SYMPL": new PaymobPaymentStrategy("Paymob-SYMPL"),
-  "Paymob-ApplePay": new PaymobPaymentStrategy("Paymob-ApplePay"),
   COD: new CODPaymentStrategy(),
 };
 
@@ -378,6 +352,7 @@ export const getPaymentProvider = (paymentMethod) => {
 
 /**
  * Process payment using the appropriate strategy
+ * ✅ NOTE: Activation should be validated BEFORE calling this function
  * @param {string} paymentMethod - The payment method name
  * @param {Object} order - The order document
  * @param {Object} context - Additional context

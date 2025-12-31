@@ -1,12 +1,17 @@
+// paymob.service.js
+// ✅ Paymob payment service
+// ❌ REMOVED: PaymobConfig.isPaymentMethodEnabled() check
+// Activation is validated in validatePaymentMethod() BEFORE reaching this service
+
 import axios from "axios";
 import Order from "../models/order.model.js";
 import PaymobConfig from "../models/paymobConfig.model.js";
 import {
   generateUniqueId,
-  generateHMAC,
   createPaymobIntention,
   getBaseUrl,
 } from "../utils/paymob.utils.js";
+import Cart from "../models/cart.model.js";
 
 class PaymobService {
   /**
@@ -34,9 +39,6 @@ class PaymobService {
       "Paymob-Kiosk": "kiosk",
       "Paymob-Installments": "installments",
       "Paymob-ValU": "valu",
-      "Paymob-Souhoola": "souhoola",
-      "Paymob-SYMPL": "sympl",
-      "Paymob-ApplePay": "applepay",
     };
 
     return defaultNames[paymentMethodName] || "card";
@@ -49,9 +51,7 @@ class PaymobService {
     try {
       const response = await axios.post(
         `${process.env.PAYMOB_API_URL}/auth/tokens`,
-        {
-          api_key: process.env.PAYMOB_API_KEY,
-        }
+        { api_key: process.env.PAYMOB_API_KEY }
       );
       return {
         success: true,
@@ -68,25 +68,17 @@ class PaymobService {
 
   /**
    * Create Paymob payment for order
+   * ✅ NOTE: Activation is validated in validatePaymentMethod() BEFORE reaching here
    * @param {Object} order - The order document
    * @param {Object} req - Express request object
-   * @param {String} paymentMethodName - Payment method name ("Paymob-Card" or "Paymob-Wallet")
+   * @param {String} paymentMethodName - Payment method name
    */
   async createPaymentForOrder(order, req, paymentMethodName) {
     try {
       const config = await this.getConfig();
 
-      // Check if payment method is enabled
+      // ✅ Only validate amount (activation is done in validatePaymentMethod)
       if (config) {
-        const isEnabled = await PaymobConfig.isPaymentMethodEnabled(paymentMethodName);
-        if (!isEnabled) {
-          return {
-            success: false,
-            message: `${paymentMethodName} is currently disabled`,
-          };
-        }
-
-        // Validate order amount
         const amountValidation = await PaymobConfig.validateOrderAmount(
           order.totalPrice,
           paymentMethodName
@@ -114,11 +106,9 @@ class PaymobService {
       await order.save();
 
       const baseUrl = getBaseUrl(req);
-
-      // Get integration name from config
       const integrationName = await this.getIntegrationName(paymentMethodName);
 
-      console.log(`Payment Method: ${paymentMethodName}, Integration Name: ${integrationName}`);
+      console.log(`Payment Method: ${paymentMethodName}, Integration: ${integrationName}`);
 
       // Get user details
       const user = await order.populate("buyer");
@@ -142,13 +132,11 @@ class PaymobService {
         });
       }
 
-      // Get currency from config or default to EGP
+      // Get settings from config
       const currency = config?.currency || "EGP";
-
-      // Get custom URLs from config or use defaults
       const frontendUrl = process.env.FRONT_PRODUCTION_URL || process.env.CLIENT_URL;
       const redirectUrl = config?.customRedirectUrl || `${frontendUrl}/payment-redirect`;
-      const webhookUrl = config?.customWebhookUrl || `${baseUrl}/api/v2/paymob-webhook`;
+      const webhookUrl = config?.customWebhookUrl || `${baseUrl}/api/v2/webhooks/paymob`;
 
       // Create Paymob intention
       const result = await createPaymobIntention({
@@ -203,21 +191,14 @@ class PaymobService {
 
   /**
    * Refund a Paymob transaction
-   * @param {string} transactionId - The Paymob transaction ID
-   * @param {number} amountCents - Amount to refund in cents
    */
   async refundTransaction(transactionId, amountCents) {
     try {
-      // First authenticate
       const auth = await this.authenticate();
       if (!auth.success) {
-        return {
-          success: false,
-          message: "Authentication failed: " + auth.error,
-        };
+        return { success: false, message: "Authentication failed: " + auth.error };
       }
 
-      // Call refund API
       const response = await axios.post(
         `${process.env.PAYMOB_API_URL}/acceptance/void_refund/refund`,
         {
@@ -253,29 +234,20 @@ class PaymobService {
 
   /**
    * Void a Paymob transaction (same-day cancellation)
-   * @param {string} transactionId - The Paymob transaction ID
    */
   async voidTransaction(transactionId) {
     try {
       const config = await this.getConfig();
 
       if (config && !config.allowVoidTransaction) {
-        return {
-          success: false,
-          message: "Void transactions are disabled in configuration",
-        };
+        return { success: false, message: "Void transactions are disabled" };
       }
 
-      // First authenticate
       const auth = await this.authenticate();
       if (!auth.success) {
-        return {
-          success: false,
-          message: "Authentication failed: " + auth.error,
-        };
+        return { success: false, message: "Authentication failed: " + auth.error };
       }
 
-      // Call void API
       const response = await axios.post(
         `${process.env.PAYMOB_API_URL}/acceptance/void_refund/void`,
         {
@@ -307,22 +279,15 @@ class PaymobService {
   }
 
   /**
-   * Capture an authorized transaction (for auth-capture flow)
-   * @param {string} transactionId - The Paymob transaction ID
-   * @param {number} amountCents - Amount to capture in cents
+   * Capture an authorized transaction
    */
   async captureTransaction(transactionId, amountCents) {
     try {
-      // First authenticate
       const auth = await this.authenticate();
       if (!auth.success) {
-        return {
-          success: false,
-          message: "Authentication failed: " + auth.error,
-        };
+        return { success: false, message: "Authentication failed: " + auth.error };
       }
 
-      // Call capture API
       const response = await axios.post(
         `${process.env.PAYMOB_API_URL}/acceptance/capture`,
         {
@@ -356,31 +321,20 @@ class PaymobService {
 
   /**
    * Retrieve transaction details
-   * @param {string} transactionId - The Paymob transaction ID
    */
   async getTransaction(transactionId) {
     try {
       const auth = await this.authenticate();
       if (!auth.success) {
-        return {
-          success: false,
-          message: "Authentication failed: " + auth.error,
-        };
+        return { success: false, message: "Authentication failed: " + auth.error };
       }
 
       const response = await axios.get(
         `${process.env.PAYMOB_API_URL}/acceptance/transactions/${transactionId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${auth.token}`,
-          },
-        }
+        { headers: { Authorization: `Bearer ${auth.token}` } }
       );
 
-      return {
-        success: true,
-        data: response.data,
-      };
+      return { success: true, data: response.data };
     } catch (error) {
       console.error("Paymob get transaction error:", error.response?.data || error.message);
       return {
@@ -393,13 +347,10 @@ class PaymobService {
   /**
    * Process webhook payment confirmation
    */
-  async processWebhookPayment(webhookData) {
+ async processWebhookPayment(webhookData) {
     try {
       console.log("Processing webhook:", JSON.stringify(webhookData, null, 2));
 
-      const config = await this.getConfig();
-
-      // Find order by unique payment ID
       let order = null;
       let transactionSuccess = false;
 
@@ -413,14 +364,9 @@ class PaymobService {
           (webhookData.obj.id && !webhookData.obj.error);
       }
 
-      // Try to find by merchant_order_id (special_reference)
+      // Try to find by merchant_order_id
       if (webhookData.obj?.merchant_order_id) {
-        order = await Order.findOne({
-          uniquePaymentId: webhookData.obj.merchant_order_id,
-        });
-        console.log(
-          `Looking for order by merchant_order_id: ${webhookData.obj.merchant_order_id}`
-        );
+        order = await Order.findOne({ uniquePaymentId: webhookData.obj.merchant_order_id });
       }
 
       // Try to find by extras.ee
@@ -428,9 +374,6 @@ class PaymobService {
         order = await Order.findOne({
           uniquePaymentId: webhookData.obj.payment_key_claims.extra.ee,
         });
-        console.log(
-          `Looking for order by extras.ee: ${webhookData.obj.payment_key_claims.extra.ee}`
-        );
       }
 
       if (!order) {
@@ -438,15 +381,13 @@ class PaymobService {
         return { success: false, message: "Order not found" };
       }
 
-      // Store transaction ID for future refunds/voids
+      // Store transaction ID
       if (webhookData.obj?.id) {
         order.paymobTransactionId = webhookData.obj.id.toString();
       }
 
-      // Update order based on transaction status
+      // Update order status
       if (transactionSuccess && webhookData.type === "TRANSACTION") {
-        console.log(`Order found: ${order.uniquePaymentId}, updating to completed`);
-
         order.paymentStatus = "Completed";
         order.orderStatus = "Paid";
         order.paymobData = {
@@ -454,11 +395,25 @@ class PaymobService {
           webhookResponse: webhookData,
           completedAt: new Date(),
         };
-
         await order.save();
         console.log("Payment completed:", order.uniquePaymentId);
+
+        // ✅ ADD CART CLEARING LOGIC HERE
+        try {
+          const cart = await Cart.findOne({ owner: order.buyer });
+          if (cart && cart.products.length > 0) {
+            cart.products = [];
+            cart.totalPrice = 0;
+            cart.totalQuantity = 0;
+            await cart.save();
+            console.log(`Cart cleared for user ${order.buyer} after Paymob payment success`);
+          }
+        } catch (cartError) {
+          console.error("Error clearing cart after Paymob payment:", cartError);
+          // Don't fail the webhook - order is already marked as paid
+        }
+
       } else if (!transactionSuccess && webhookData.obj) {
-        console.log(`Payment failed: ${order.uniquePaymentId}`);
         order.paymentStatus = "Failed";
         order.orderStatus = "Failed";
         order.paymobData = {
@@ -468,6 +423,7 @@ class PaymobService {
           failureReason: webhookData.obj.data?.message || "Payment failed",
         };
         await order.save();
+        console.log("Payment failed:", order.uniquePaymentId);
       }
 
       return { success: true, order };
@@ -479,27 +435,20 @@ class PaymobService {
 
   /**
    * Handle order cancellation with auto-void/refund
-   * @param {Object} order - The order document
    */
   async handleOrderCancellation(order) {
     const config = await this.getConfig();
     const transactionId = order.paymobTransactionId || order.paymobData?.obj?.id;
 
     if (!transactionId) {
-      return {
-        success: true,
-        message: "No Paymob transaction to cancel",
-      };
+      return { success: true, message: "No Paymob transaction to cancel" };
     }
 
-    // Check payment status
     if (order.paymentStatus === "Pending") {
-      // Transaction not yet completed - try to void if enabled
       if (config?.autoVoidOnCancellation) {
         return this.voidTransaction(transactionId);
       }
     } else if (order.paymentStatus === "Completed") {
-      // Transaction completed - try to refund if enabled
       if (config?.autoRefundOnCancellation) {
         const canRefund = await PaymobConfig.canRefundOrder(
           order.createdAt,
@@ -508,19 +457,13 @@ class PaymobService {
         );
 
         if (canRefund.success) {
-          return this.refundTransaction(
-            transactionId,
-            Math.round(order.totalPrice * 100)
-          );
+          return this.refundTransaction(transactionId, Math.round(order.totalPrice * 100));
         }
         return canRefund;
       }
     }
 
-    return {
-      success: true,
-      message: "No automatic action taken - manual processing may be required",
-    };
+    return { success: true, message: "No automatic action taken" };
   }
 }
 

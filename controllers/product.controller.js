@@ -6,6 +6,10 @@ import {
   destroyMultipleFromCloudinary,
   uploadMultipleOnCloudinary,
 } from "../utils/cloudinary.js";
+
+import GlobalDiscount from "../models/globalDiscount.model.js";
+import { calculateProductPrice } from "../helpers/discount.helpers.js";
+
 export const productListing = async (req, res) => {
   try {
     const { categoryId } = req.params;
@@ -85,15 +89,16 @@ export const productListing = async (req, res) => {
     //     .json({ success: false, message: "Unable to list the product" });
     // }
 
-    
     let uploadedImages = [];
-    
+
     try {
       // Upload all images to Cloudinary directly from memory
       uploadedImages = await uploadMultipleOnCloudinary(req.files, "products");
-      
-      const uploadedImagesUrl = uploadedImages.map(img => img.secure_url);
-      const imagesPublicIdFromCloudinary = uploadedImages.map(img => img.public_id);
+
+      const uploadedImagesUrl = uploadedImages.map((img) => img.secure_url);
+      const imagesPublicIdFromCloudinary = uploadedImages.map(
+        (img) => img.public_id
+      );
 
       const listProduct = await Product.create({
         name: name,
@@ -107,8 +112,10 @@ export const productListing = async (req, res) => {
 
       const product = await Product.findById(listProduct._id)
         .populate("category")
-        .select("name description price ingredients isAvailable images category");
-        
+        .select(
+          "name description price ingredients isAvailable images category "
+        );
+
       if (!product) {
         // If product creation failed, cleanup uploaded images
         await destroyMultipleFromCloudinary(imagesPublicIdFromCloudinary);
@@ -117,26 +124,23 @@ export const productListing = async (req, res) => {
           .json({ success: false, message: "Unable to list the product" });
       }
 
-      return res
-        .status(201)
-        .json({ 
-          success: true,
-          data: product, 
-          message: "Product listed successfully" 
-        });
-        
+      return res.status(201).json({
+        success: true,
+        data: product,
+        message: "Product listed successfully",
+      });
     } catch (uploadError) {
       console.error("Error uploading images:", uploadError);
-      
+
       // Cleanup any uploaded images if there was an error
       if (uploadedImages.length > 0) {
-        const publicIds = uploadedImages.map(img => img.public_id);
+        const publicIds = uploadedImages.map((img) => img.public_id);
         await destroyMultipleFromCloudinary(publicIds);
       }
-      
-      return res.status(500).json({ 
-        success: false, 
-        message: "Error uploading images. Please try again." 
+
+      return res.status(500).json({
+        success: false,
+        message: "Error uploading images. Please try again.",
       });
     }
   } catch (error) {
@@ -201,15 +205,11 @@ export const getProductById = async (req, res) => {
       data: product,
       message: "Product fetched successfully",
     });
-
   } catch (error) {
     console.error("Error in getProductById function", error);
-    return res
-      .status(500)
-      .json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 export const updateListedProduct = async (req, res) => {
   try {
@@ -325,12 +325,12 @@ export const addProductImages = async (req, res) => {
     }
 
     let uploadedImages = [];
-     try {
+    try {
       // Upload all images to Cloudinary directly from memory buffers
       uploadedImages = await uploadMultipleOnCloudinary(req.files, "products");
-      
-      const uploadedImagesUrl = uploadedImages.map(img => img.secure_url);
-      const uploadedImagesPublicId = uploadedImages.map(img => img.public_id);
+
+      const uploadedImagesUrl = uploadedImages.map((img) => img.secure_url);
+      const uploadedImagesPublicId = uploadedImages.map((img) => img.public_id);
 
       // Update product with new images using $push to add to existing arrays
       const updatedProduct = await Product.findByIdAndUpdate(
@@ -355,21 +355,20 @@ export const addProductImages = async (req, res) => {
         });
       }
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         success: true,
-        data: updatedProduct, 
-        message: "Images added successfully" 
+        data: updatedProduct,
+        message: "Images added successfully",
       });
-
     } catch (uploadError) {
       console.error("Error uploading images:", uploadError);
-      
+
       // Cleanup any uploaded images if there was an error
       if (uploadedImages.length > 0) {
-        const publicIds = uploadedImages.map(img => img.public_id);
+        const publicIds = uploadedImages.map((img) => img.public_id);
         await destroyMultipleFromCloudinary(publicIds);
       }
-      
+
       return res.status(500).json({
         success: false,
         message: "Error uploading images. Please try again.",
@@ -431,7 +430,7 @@ export const addProductImages = async (req, res) => {
 export const deleteSingleImage = async (req, res) => {
   try {
     const { productId, publicId } = req.params; // Get publicId from params
-    
+
     if (!productId) {
       return res
         .status(400)
@@ -454,7 +453,7 @@ export const deleteSingleImage = async (req, res) => {
 
     // Find the index of the publicId in the array
     const publicIdIndex = product.imagesPublicId.indexOf(publicId);
-    
+
     if (publicIdIndex === -1) {
       return res.status(404).json({
         success: false,
@@ -471,8 +470,8 @@ export const deleteSingleImage = async (req, res) => {
       {
         $pull: {
           images: product.images[publicIdIndex], // Remove the corresponding image URL
-          imagesPublicId: publicId // Remove the publicId
-        }
+          imagesPublicId: publicId, // Remove the publicId
+        },
       },
       { new: true }
     );
@@ -487,7 +486,7 @@ export const deleteSingleImage = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: updatedProduct,
-      message: "Image deleted successfully"
+      message: "Image deleted successfully",
     });
   } catch (error) {
     console.log("Error in deleteSingleImage function", error);
@@ -511,7 +510,7 @@ export const deleteProduct = async (req, res) => {
         message: "Product with the given id is not found",
       });
     }
-    
+
     try {
       // Delete all images from Cloudinary using the correct field name
       if (product.imagesPublicId && product.imagesPublicId.length > 0) {
@@ -530,11 +529,10 @@ export const deleteProduct = async (req, res) => {
         });
       }
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         success: true,
-        message: "Product and associated data deleted successfully" 
+        message: "Product and associated data deleted successfully",
       });
-
     } catch (deleteError) {
       console.error("Error during product deletion:", deleteError);
       return res.status(500).json({
@@ -583,7 +581,7 @@ export const getProducts = async (req, res) => {
     const filter = {};
 
     if (name) filter.name = { $regex: name, $options: "i" };
-    
+
     if (category) {
       if (!mongoose.Types.ObjectId.isValid(category)) {
         return res.status(400).json({
@@ -594,7 +592,7 @@ export const getProducts = async (req, res) => {
       //we can use new instead of createFromHexString
       filter.category = mongoose.Types.ObjectId.createFromHexString(category);
     }
-    
+
     if (minPrice) {
       const min = Number(minPrice);
       if (isNaN(min)) {
@@ -605,7 +603,7 @@ export const getProducts = async (req, res) => {
       }
       filter.price = { $gte: min };
     }
-    
+
     if (maxPrice) {
       const max = Number(maxPrice);
       if (isNaN(max)) {
@@ -634,7 +632,8 @@ export const getProducts = async (req, res) => {
       } else {
         return res.status(400).json({
           success: false,
-          message: "Invalid sorting filter. Use format: field:order (e.g., name:asc, price:desc, rating:asc)",
+          message:
+            "Invalid sorting filter. Use format: field:order (e.g., name:asc, price:desc, rating:asc)",
         });
       }
     } else {
@@ -647,7 +646,7 @@ export const getProducts = async (req, res) => {
       },
       {
         $lookup: {
-          from: "reviews", 
+          from: "reviews",
           localField: "_id",
           foreignField: "productId",
           as: "reviews",
@@ -673,6 +672,10 @@ export const getProducts = async (req, res) => {
           category: 1,
           images: 1,
           averageRating: 1,
+          salePrice: 1,
+          saleStartDate: 1,
+          saleEndDate: 1,
+          isOnSale: 1,
         },
       },
     ];
@@ -725,5 +728,225 @@ export const getReviewsForProduct = async (req, res) => {
   } catch (error) {
     console.log("Error in getReviewsForProduct function", error);
     return res.status(404).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== SALE PRICE MANAGEMENT (ADMIN) ====================
+
+/**
+ * Set product sale price (Admin)
+ * PATCH /api/v2/product/:productId/sale
+ */
+export const setProductSale = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { salePrice, saleStartDate, saleEndDate, isOnSale } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: "Product ID is required",
+      });
+    }
+
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    // Validate sale price
+    if (salePrice !== undefined) {
+      if (salePrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Sale price must be greater than 0",
+        });
+      }
+      if (salePrice >= product.price) {
+        return res.status(400).json({
+          success: false,
+          message: "Sale price must be less than regular price",
+        });
+      }
+    }
+
+    // Update sale fields
+    if (salePrice !== undefined) product.salePrice = salePrice;
+    if (saleStartDate !== undefined) product.saleStartDate = saleStartDate;
+    if (saleEndDate !== undefined) product.saleEndDate = saleEndDate;
+    product.isOnSale = isOnSale !== undefined ? isOnSale : true;
+
+    await product.save();
+
+    return res.status(200).json({
+      success: true,
+      data: product,
+      message: "Product sale price updated successfully",
+    });
+  } catch (error) {
+    console.error("Error in setProductSale:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Remove product sale price (Admin)
+ * PATCH /api/v2/product/:productId/sale/remove
+ */
+export const removeProductSale = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: "Product ID is required",
+      });
+    }
+
+    const product = await Product.findByIdAndUpdate(
+      productId,
+      {
+        $unset: { salePrice: 1, saleStartDate: 1, saleEndDate: 1 },
+        isOnSale: false,
+      },
+      { new: true }
+    );
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: product,
+      message: "Product sale price removed successfully",
+    });
+  } catch (error) {
+    console.error("Error in removeProductSale:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Get product with effective price (Public)
+ * GET /api/v2/product/:productId/with-discount
+ */
+export const getProductWithDiscount = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const product = await Product.findById(productId).populate("category");
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    // Calculate effective price with all discounts
+    const priceInfo = await calculateProductPrice(product);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...product.toObject(),
+        effectivePrice: priceInfo.price,
+        originalPrice: priceInfo.originalPrice,
+        discount: priceInfo.discount,
+        discountPercentage: priceInfo.discountPercentage,
+        discountType: priceInfo.discountType,
+      },
+      message: "Product fetched successfully",
+    });
+  } catch (error) {
+    console.error("Error in getProductWithDiscount:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Get all products on sale (Public)
+ * GET /api/v2/product/on-sale
+ */
+export const getProductsOnSale = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = parseInt(limit);
+
+    const now = new Date();
+
+    // Find products with active sales
+    const products = await Product.find({
+      isOnSale: true,
+      salePrice: { $exists: true, $ne: null },
+      $or: [
+        { saleStartDate: { $exists: false } },
+        { saleStartDate: { $lte: now } },
+      ],
+      $or: [
+        { saleEndDate: { $exists: false } },
+        { saleEndDate: { $gte: now } },
+      ],
+      isAvailable: true,
+    })
+      .populate("category")
+      .skip(skip)
+      .limit(limitNum)
+      .sort({ createdAt: -1 });
+
+    const total = await Product.countDocuments({
+      isOnSale: true,
+      salePrice: { $exists: true, $ne: null },
+      isAvailable: true,
+    });
+
+    // Calculate effective prices
+    const productsWithPrices = await Promise.all(
+      products.map(async (product) => {
+        const priceInfo = await calculateProductPrice(product);
+        return {
+          ...product.toObject(),
+          effectivePrice: priceInfo.price,
+          discount: priceInfo.discount,
+          discountPercentage: priceInfo.discountPercentage,
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: productsWithPrices,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(total / limitNum),
+        total,
+        hasNextPage: skip + products.length < total,
+        hasPrevPage: parseInt(page) > 1,
+      },
+      message: "Products on sale fetched successfully",
+    });
+  } catch (error) {
+    console.error("Error in getProductsOnSale:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };

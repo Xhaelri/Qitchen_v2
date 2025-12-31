@@ -1,11 +1,9 @@
 // paymobConfig.model.js
+// ✅ Provider-specific settings ONLY - Activation is in PaymentMethod model
 import mongoose from "mongoose";
 
 const paymobConfigSchema = new mongoose.Schema(
   {
-    // ==================== API CREDENTIALS ====================
-    // Note: Sensitive credentials should be in .env, but these flags control behavior
-    
     // ==================== ORDER AMOUNT SETTINGS ====================
     minOrderAmount: {
       type: Number,
@@ -19,7 +17,7 @@ const paymobConfigSchema = new mongoose.Schema(
       min: 0,
       description: "Maximum order amount in EGP",
     },
-    
+
     // ==================== CURRENCY SETTINGS ====================
     currency: {
       type: String,
@@ -27,11 +25,11 @@ const paymobConfigSchema = new mongoose.Schema(
       enum: ["EGP", "USD", "SAR", "AED", "OMR", "PKR"],
       description: "Default currency for transactions",
     },
-    
+
     // ==================== REFUND SETTINGS ====================
     refundWindowHours: {
       type: Number,
-      default: 72,  // Paymob typically allows refunds within 72 hours
+      default: 72,
       min: 0,
       description: "Hours after payment within which refunds are allowed",
     },
@@ -45,38 +43,56 @@ const paymobConfigSchema = new mongoose.Schema(
       default: false,
       description: "Automatically refund when order is cancelled",
     },
-    
+
     // ==================== VOID SETTINGS ====================
     allowVoidTransaction: {
       type: Boolean,
       default: true,
-      description: "Allow voiding transactions (same-day cancellation before settlement)",
+      description: "Allow voiding transactions before settlement",
     },
     autoVoidOnCancellation: {
       type: Boolean,
       default: true,
       description: "Auto-void pending transactions when order is cancelled",
     },
-    
+
     // ==================== CHECKOUT SETTINGS ====================
     checkoutType: {
       type: String,
       default: "hosted",
       enum: ["hosted", "iframe", "pixel"],
-      description: "Checkout experience type: hosted (redirect), iframe (embedded), pixel (native)",
+      description: "Checkout experience type",
     },
-    
-    // ==================== CARD PAYMENT SETTINGS ====================
-    cardPaymentEnabled: {
-      type: Boolean,
-      default: true,
-      description: "Enable card payments (Visa, Mastercard, Meeza)",
-    },
+
+    // ==================== INTEGRATION NAMES ====================
+    // These are the integration IDs from Paymob dashboard
     cardIntegrationName: {
       type: String,
       default: "card",
-      description: "Integration name for card payments from Paymob dashboard",
+      description: "Integration name for card payments",
     },
+    walletIntegrationName: {
+      type: String,
+      default: "wallet",
+      description: "Integration name for wallet payments",
+    },
+    kioskIntegrationName: {
+      type: String,
+      default: "kiosk",
+      description: "Integration name for kiosk payments",
+    },
+    installmentsIntegrationName: {
+      type: String,
+      default: "installments",
+      description: "Integration name for installments",
+    },
+    valuIntegrationName: {
+      type: String,
+      default: "valu",
+      description: "Integration name for ValU BNPL",
+    },
+
+    // ==================== CARD PAYMENT OPTIONS ====================
     saveCardEnabled: {
       type: Boolean,
       default: false,
@@ -87,105 +103,28 @@ const paymobConfigSchema = new mongoose.Schema(
       default: true,
       description: "Require 3D Secure authentication for card payments",
     },
-    
-    // ==================== WALLET PAYMENT SETTINGS ====================
-    walletPaymentEnabled: {
-      type: Boolean,
-      default: true,
-      description: "Enable mobile wallet payments (Vodafone Cash, Orange, Etisalat, etc.)",
-    },
-    walletIntegrationName: {
-      type: String,
-      default: "wallet",
-      description: "Integration name for wallet payments from Paymob dashboard",
-    },
-    
-    // ==================== KIOSK PAYMENT SETTINGS ====================
-    kioskPaymentEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable kiosk payments (Aman, Masary)",
-    },
-    kioskIntegrationName: {
-      type: String,
-      default: "kiosk",
-      description: "Integration name for kiosk payments",
-    },
+
+    // ==================== KIOSK OPTIONS ====================
     kioskExpirationHours: {
       type: Number,
       default: 24,
       description: "Hours before kiosk payment reference expires",
     },
-    
-    // ==================== INSTALLMENTS SETTINGS ====================
-    installmentsEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable bank installment payments",
-    },
-    installmentsIntegrationName: {
-      type: String,
-      default: "installments",
-      description: "Integration name for installments",
-    },
+
+    // ==================== INSTALLMENTS OPTIONS ====================
     minInstallmentAmount: {
       type: Number,
       default: 500,
       description: "Minimum order amount for installments in EGP",
     },
-    
-    // ==================== BNPL (BUY NOW PAY LATER) SETTINGS ====================
-    // ValU
-    valuEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable ValU BNPL payments",
-    },
-    valuIntegrationName: {
-      type: String,
-      default: "valu",
-    },
+
+    // ==================== VALU OPTIONS ====================
     valuMinAmount: {
       type: Number,
       default: 500,
+      description: "Minimum order amount for ValU in EGP",
     },
-    
-    // Souhoola
-    souhoolaEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable Souhoola BNPL payments",
-    },
-    souhoolaIntegrationName: {
-      type: String,
-      default: "souhoola",
-    },
-    
-    // SYMPL
-    symplEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable SYMPL BNPL payments",
-    },
-    symplIntegrationName: {
-      type: String,
-      default: "sympl",
-    },
-    
-    // Other BNPL providers can be added similarly
-    // (Aman, Forsa, Halan, Premium, Contact, etc.)
-    
-    // ==================== APPLE PAY SETTINGS ====================
-    applePayEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable Apple Pay (requires separate activation with Paymob)",
-    },
-    applePayIntegrationName: {
-      type: String,
-      default: "applepay",
-    },
-    
+
     // ==================== WEBHOOK SETTINGS ====================
     webhookEnabled: {
       type: Boolean,
@@ -196,29 +135,27 @@ const paymobConfigSchema = new mongoose.Schema(
       default: false,
       description: "Flag indicating HMAC secret is configured in env",
     },
-    
+
     // ==================== TRANSACTION SETTINGS ====================
     transactionExpirationMinutes: {
       type: Number,
       default: 30,
       description: "Minutes before unpaid transaction expires",
     },
-    
+
     // ==================== CALLBACK URL SETTINGS ====================
-    // These override env variables if set
     customRedirectUrl: {
       type: String,
       default: "",
-      description: "Custom redirect URL after payment (overrides default)",
+      description: "Custom redirect URL after payment",
     },
     customWebhookUrl: {
       type: String,
       default: "",
-      description: "Custom webhook URL (overrides default)",
+      description: "Custom webhook URL",
     },
-    
+
     // ==================== DELIVERY SETTINGS ====================
-    // Shared with StripeConfig or specific to Paymob
     defaultDeliveryFee: {
       type: Number,
       default: 0,
@@ -229,18 +166,19 @@ const paymobConfigSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
-    
+
     // ==================== STATUS FLAGS ====================
     isActive: {
       type: Boolean,
       default: true,
+      description: "Whether Paymob provider is configured and ready",
     },
     isLiveMode: {
       type: Boolean,
       default: false,
       description: "true = live mode, false = test/sandbox mode",
     },
-    
+
     // ==================== METADATA ====================
     lastSyncedAt: {
       type: Date,
@@ -268,55 +206,34 @@ paymobConfigSchema.statics.getActiveConfig = async function () {
 
 /**
  * Get integration name for a payment method
+ * @param {string} paymentMethod - e.g., 'Paymob-Card', 'Paymob-Wallet'
  */
 paymobConfigSchema.statics.getIntegrationName = async function (paymentMethod) {
   const config = await this.findOne({ isActive: true });
   if (!config) return null;
-  
+
   const integrationMap = {
     "Paymob-Card": config.cardIntegrationName,
     "Paymob-Wallet": config.walletIntegrationName,
     "Paymob-Kiosk": config.kioskIntegrationName,
     "Paymob-Installments": config.installmentsIntegrationName,
     "Paymob-ValU": config.valuIntegrationName,
-    "Paymob-Souhoola": config.souhoolaIntegrationName,
-    "Paymob-SYMPL": config.symplIntegrationName,
-    "Paymob-ApplePay": config.applePayIntegrationName,
   };
-  
+
   return integrationMap[paymentMethod] || null;
 };
 
 /**
- * Check if a payment method is enabled
- */
-paymobConfigSchema.statics.isPaymentMethodEnabled = async function (paymentMethod) {
-  const config = await this.findOne({ isActive: true });
-  if (!config) return false;
-  
-  const enabledMap = {
-    "Paymob-Card": config.cardPaymentEnabled,
-    "Paymob-Wallet": config.walletPaymentEnabled,
-    "Paymob-Kiosk": config.kioskPaymentEnabled,
-    "Paymob-Installments": config.installmentsEnabled,
-    "Paymob-ValU": config.valuEnabled,
-    "Paymob-Souhoola": config.souhoolaEnabled,
-    "Paymob-SYMPL": config.symplEnabled,
-    "Paymob-ApplePay": config.applePayEnabled,
-  };
-  
-  return enabledMap[paymentMethod] || false;
-};
-
-/**
  * Validate order amount against config limits
+ * @param {number} amount - Order amount
+ * @param {string} paymentMethod - Payment method name (optional)
  */
 paymobConfigSchema.statics.validateOrderAmount = async function (amount, paymentMethod) {
   const config = await this.findOne({ isActive: true });
   if (!config) {
-    return { success: true }; // No config = no restrictions
+    return { success: true };
   }
-  
+
   if (config.minOrderAmount > 0 && amount < config.minOrderAmount) {
     return {
       success: false,
@@ -324,7 +241,7 @@ paymobConfigSchema.statics.validateOrderAmount = async function (amount, payment
       statusCode: 400,
     };
   }
-  
+
   if (config.maxOrderAmount > 0 && amount > config.maxOrderAmount) {
     return {
       success: false,
@@ -332,7 +249,7 @@ paymobConfigSchema.statics.validateOrderAmount = async function (amount, payment
       statusCode: 400,
     };
   }
-  
+
   // Check installment minimum if applicable
   if (paymentMethod === "Paymob-Installments" && amount < config.minInstallmentAmount) {
     return {
@@ -341,7 +258,7 @@ paymobConfigSchema.statics.validateOrderAmount = async function (amount, payment
       statusCode: 400,
     };
   }
-  
+
   // Check ValU minimum if applicable
   if (paymentMethod === "Paymob-ValU" && amount < config.valuMinAmount) {
     return {
@@ -350,7 +267,7 @@ paymobConfigSchema.statics.validateOrderAmount = async function (amount, payment
       statusCode: 400,
     };
   }
-  
+
   return { success: true };
 };
 
@@ -360,15 +277,15 @@ paymobConfigSchema.statics.validateOrderAmount = async function (amount, payment
 paymobConfigSchema.statics.canRefundOrder = async function (orderCreatedAt, refundAmount, orderTotal) {
   const config = await this.findOne({ isActive: true });
   if (!config) {
-    return { success: true }; // No config = allow refund
+    return { success: true };
   }
-  
+
   // Check refund window
   if (config.refundWindowHours > 0) {
     const orderDate = new Date(orderCreatedAt);
     const now = new Date();
     const hoursSinceOrder = (now - orderDate) / (1000 * 60 * 60);
-    
+
     if (hoursSinceOrder > config.refundWindowHours) {
       return {
         success: false,
@@ -377,7 +294,7 @@ paymobConfigSchema.statics.canRefundOrder = async function (orderCreatedAt, refu
       };
     }
   }
-  
+
   // Check partial refund
   if (refundAmount && refundAmount < orderTotal && !config.allowPartialRefunds) {
     return {
@@ -386,28 +303,39 @@ paymobConfigSchema.statics.canRefundOrder = async function (orderCreatedAt, refu
       statusCode: 400,
     };
   }
-  
+
   return { success: true };
 };
 
-// ==================== INSTANCE METHODS ====================
-
 /**
- * Get all enabled payment methods
+ * Get configuration summary for dashboard
  */
-paymobConfigSchema.methods.getEnabledPaymentMethods = function () {
-  const methods = [];
-  
-  if (this.cardPaymentEnabled) methods.push("Paymob-Card");
-  if (this.walletPaymentEnabled) methods.push("Paymob-Wallet");
-  if (this.kioskPaymentEnabled) methods.push("Paymob-Kiosk");
-  if (this.installmentsEnabled) methods.push("Paymob-Installments");
-  if (this.valuEnabled) methods.push("Paymob-ValU");
-  if (this.souhoolaEnabled) methods.push("Paymob-Souhoola");
-  if (this.symplEnabled) methods.push("Paymob-SYMPL");
-  if (this.applePayEnabled) methods.push("Paymob-ApplePay");
-  
-  return methods;
+paymobConfigSchema.methods.getSummary = function () {
+  return {
+    mode: this.isLiveMode ? "Live" : "Test",
+    currency: this.currency,
+    orderLimits: {
+      min: this.minOrderAmount,
+      max: this.maxOrderAmount,
+    },
+    refundPolicy: {
+      windowHours: this.refundWindowHours,
+      partialAllowed: this.allowPartialRefunds,
+      autoRefund: this.autoRefundOnCancellation,
+    },
+    integrations: {
+      card: this.cardIntegrationName,
+      wallet: this.walletIntegrationName,
+      kiosk: this.kioskIntegrationName,
+      installments: this.installmentsIntegrationName,
+      valu: this.valuIntegrationName,
+    },
+    features: {
+      saveCards: this.saveCardEnabled,
+      require3DS: this.require3DSecure,
+      voidTransactions: this.allowVoidTransaction,
+    },
+  };
 };
 
 const PaymobConfig = mongoose.model("PaymobConfig", paymobConfigSchema);

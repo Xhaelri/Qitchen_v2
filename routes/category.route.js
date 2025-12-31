@@ -1,3 +1,4 @@
+// category.route.js - FIXED VERSION
 import express from "express";
 import {
   createCategory,
@@ -5,22 +6,52 @@ import {
   getAllCategories,
   getCategoryById,
   updateCategory,
+  setCategoryDiscount,
+  removeCategoryDiscount,
+  getCategoryWithDiscount,
+  getCategoriesWithDiscounts,
 } from "../controllers/category.controller.js";
 import jwtVerify from "../middleware/auth.middleware.js";
 import checkAdminRole from "../middleware/role.middleware.js";
 
 const router = express.Router();
 
-// router.use(jwtVerify);
+// ==================== ADMIN ROUTES ====================
 
+// Create category
 router.post("/create-category", jwtVerify, checkAdminRole, createCategory);
 
-router.get("/all-categories", getAllCategories);
+// Category discount management
+router.patch(
+  "/:categoryId/discount",
+  jwtVerify,
+  checkAdminRole,
+  setCategoryDiscount
+);
 
-router.get("/:categoryId", getCategoryById);
+router.patch(
+  "/:categoryId/discount/remove",
+  jwtVerify,
+  checkAdminRole,
+  removeCategoryDiscount
+);
 
+// Update category
 router.patch("/:categoryId", jwtVerify, checkAdminRole, updateCategory);
 
+// Delete category
 router.delete("/:categoryId", jwtVerify, checkAdminRole, deleteCategory);
+
+// ==================== PUBLIC ROUTES ====================
+
+// ✅ STATIC FIRST
+router.get("/all-categories", getAllCategories);
+router.get("/with-discounts", getCategoriesWithDiscounts);
+
+// ✅ SEMI-DYNAMIC
+router.get("/:categoryId/with-discount", getCategoryWithDiscount);
+
+// ✅ DYNAMIC LAST
+router.get("/:categoryId", getCategoryById);
 
 export { router };

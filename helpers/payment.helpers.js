@@ -1,3 +1,5 @@
+// payment.helpers.js
+// ✅ Single source of truth: PaymentMethod.isActive
 import DeliveryLocation from "../models/deliveryLocation.model.js";
 import PaymentMethod from "../models/paymentMethod.model.js";
 import StripeConfig from "../models/stripeConfig.model.js";
@@ -6,43 +8,38 @@ import PaymobConfig from "../models/paymobConfig.model.js";
 // ==================== PAYMENT METHOD VALIDATION ====================
 
 /**
- * Validate payment method is active and available
+ * Validate payment method is active
+ * ✅ Single source of truth: PaymentMethod.isActive
  * @param {string} paymentMethodName
  * @returns {Promise<ValidationResult>}
  */
 export const validatePaymentMethod = async (paymentMethodName) => {
   try {
-    // Check if payment method exists and is active in PaymentMethod collection
     const paymentMethod = await PaymentMethod.findOne({
       name: paymentMethodName,
-      isActive: true,
     });
 
     if (!paymentMethod) {
       return {
         success: false,
-        message: `${paymentMethodName} payment method is currently unavailable. Please choose another payment method.`,
+        message: `Payment method '${paymentMethodName}' not found`,
+        statusCode: 404,
+      };
+    }
+
+    // ✅ SINGLE CHECK - PaymentMethod.isActive is the only source of truth
+    if (!paymentMethod.isActive) {
+      return {
+        success: false,
+        message: `${paymentMethodName} is currently unavailable. Please choose another payment method.`,
         statusCode: 400,
       };
     }
 
-    // Additional validation for Paymob methods
-    if (paymentMethodName.startsWith("Paymob-")) {
-      const paymobConfig = await PaymobConfig.findOne({ isActive: true });
-
-      if (paymobConfig) {
-        const isEnabled = await PaymobConfig.isPaymentMethodEnabled(
-          paymentMethodName
-        );
-
-        if (!isEnabled) {
-          return {
-            success: false,
-            message: `${paymentMethodName} is currently disabled. Please choose another payment method.`,
-            statusCode: 400,
-          };
-        }
-      }
+    // Check if provider config exists and is active (for provider readiness)
+    const providerCheck = await checkProviderReady(paymentMethodName);
+    if (!providerCheck.success) {
+      return providerCheck;
     }
 
     return {
@@ -50,12 +47,48 @@ export const validatePaymentMethod = async (paymentMethodName) => {
       paymentMethod,
     };
   } catch (error) {
+    console.error("Error validating payment method:", error);
     return {
       success: false,
       message: "Error validating payment method",
       statusCode: 500,
     };
   }
+};
+
+/**
+ * Check if payment provider is configured and ready
+ * This checks if the provider (Stripe/Paymob) has valid config, NOT activation
+ * @param {string} paymentMethodName
+ * @returns {Promise<ValidationResult>}
+ */
+export const checkProviderReady = async (paymentMethodName) => {
+  const provider = getPaymentProvider(paymentMethodName);
+
+  if (provider === "stripe") {
+    const config = await StripeConfig.findOne({ isActive: true });
+    if (!config) {
+      return {
+        success: false,
+        message: "Stripe payment gateway is not configured. Please contact support.",
+        statusCode: 503,
+      };
+    }
+  }
+
+  if (provider === "paymob") {
+    const config = await PaymobConfig.findOne({ isActive: true });
+    if (!config) {
+      return {
+        success: false,
+        message: "Paymob payment gateway is not configured. Please contact support.",
+        statusCode: 503,
+      };
+    }
+  }
+
+  // COD (Internal) doesn't need external config
+  return { success: true };
 };
 
 // ==================== PAYMENT GATEWAY HELPERS ====================
@@ -73,9 +106,6 @@ export const isExternalPaymentGateway = (paymentMethod) => {
     "Paymob-Kiosk",
     "Paymob-Installments",
     "Paymob-ValU",
-    "Paymob-Souhoola",
-    "Paymob-SYMPL",
-    "Paymob-ApplePay",
   ].includes(paymentMethod);
 };
 
@@ -91,7 +121,7 @@ export const getPaymentGateway = (paymentMethod) => {
 };
 
 /**
- * Get payment provider name
+ * Get payment provider name (lowercase)
  * @param {string} paymentMethod
  * @returns {string}
  */
@@ -136,7 +166,7 @@ export const calculateDeliveryFee = async (
     throw new Error(`Delivery not available for ${city}, ${governorate}`);
   }
 
-  // Check for free delivery threshold (check both configs)
+  // Check for free delivery threshold from either config
   const stripeConfig = await StripeConfig.findOne({ isActive: true });
   const paymobConfig = await PaymobConfig.findOne({ isActive: true });
 
@@ -163,18 +193,18 @@ export const calculateDeliveryFee = async (
 
 /**
  * Validate order amount against config limits
+ * Uses the appropriate config based on payment method
  * @param {number} totalPrice
- * @param {string} paymentMethod - Optional, for provider-specific validation
+ * @param {string} paymentMethod - Payment method name
  * @returns {Promise<ValidationResult>}
  */
 export const validateOrderAmount = async (totalPrice, paymentMethod = null) => {
-  // Get relevant config based on payment method
   let config = null;
 
+  // Get relevant config based on payment method
   if (paymentMethod && paymentMethod.startsWith("Paymob-")) {
     config = await PaymobConfig.findOne({ isActive: true });
 
-    // Use PaymobConfig's built-in validation if available
     if (config) {
       const validation = await PaymobConfig.validateOrderAmount(
         totalPrice,
@@ -184,12 +214,18 @@ export const validateOrderAmount = async (totalPrice, paymentMethod = null) => {
         return validation;
       }
     }
-  } else {
-    // Use StripeConfig for Stripe and general validation
+  } else if (paymentMethod === "Card") {
     config = await StripeConfig.findOne({ isActive: true });
+
+    if (config) {
+      const validation = await StripeConfig.validateOrderAmount(totalPrice);
+      if (!validation.success) {
+        return validation;
+      }
+    }
   }
 
-  // Fallback to StripeConfig if no Paymob config
+  // For COD or unknown, use general limits from StripeConfig
   if (!config) {
     config = await StripeConfig.findOne({ isActive: true });
   }
@@ -242,11 +278,13 @@ export async function getPaymentMethodId(paymentMethodName) {
  * @returns {Promise<ValidationResult>}
  */
 export const validateRefundRequest = async (order, refundAmount = null) => {
-  const paymentProvider = getPaymentProvider(order.paymentMethod?.name || "");
+  // Get payment method name from order
+  const paymentMethodName = order.paymentMethod?.name || "";
+  const provider = getPaymentProvider(paymentMethodName);
 
   let config = null;
 
-  if (paymentProvider === "paymob") {
+  if (provider === "paymob") {
     config = await PaymobConfig.findOne({ isActive: true });
 
     if (config) {
@@ -256,42 +294,24 @@ export const validateRefundRequest = async (order, refundAmount = null) => {
         order.totalPrice
       );
     }
-  } else if (paymentProvider === "stripe") {
+  } else if (provider === "stripe") {
     config = await StripeConfig.findOne({ isActive: true });
-  }
 
-  if (!config) {
-    return { success: true }; // No config = allow refund
-  }
-
-  // Check refund window
-  if (config.refundWindowHours > 0) {
-    const orderDate = new Date(order.createdAt);
-    const now = new Date();
-    const hoursSinceOrder = (now - orderDate) / (1000 * 60 * 60);
-
-    if (hoursSinceOrder > config.refundWindowHours) {
-      return {
-        success: false,
-        message: `Refund window of ${config.refundWindowHours} hours has expired`,
-        statusCode: 400,
-      };
+    if (config) {
+      return StripeConfig.canRefundOrder(
+        order.createdAt,
+        refundAmount || order.totalPrice,
+        order.totalPrice
+      );
     }
   }
 
-  // Check partial refund
-  if (
-    refundAmount &&
-    refundAmount < order.totalPrice &&
-    !config.allowPartialRefunds
-  ) {
-    return {
-      success: false,
-      message: "Partial refunds are not allowed",
-      statusCode: 400,
-    };
+  // COD - no refund validation needed
+  if (provider === "cod") {
+    return { success: true };
   }
 
+  // No config = allow refund
   return { success: true };
 };
 
@@ -329,8 +349,35 @@ export const getConfigForPaymentMethod = async (paymentMethod) => {
   return getStripeConfig();
 };
 
+// ==================== ACTIVE PAYMENT METHODS ====================
+
+/**
+ * Get all active payment methods with provider readiness check
+ * @returns {Promise<Array>}
+ */
+export const getActivePaymentMethods = async () => {
+  // Get all active payment methods from database
+  const activeMethods = await PaymentMethod.find({ isActive: true }).sort({
+    sortOrder: 1,
+    name: 1,
+  });
+
+  // Check provider readiness for each
+  const availableMethods = [];
+
+  for (const method of activeMethods) {
+    const providerCheck = await checkProviderReady(method.name);
+    if (providerCheck.success) {
+      availableMethods.push(method);
+    }
+  }
+
+  return availableMethods;
+};
+
 export default {
   validatePaymentMethod,
+  checkProviderReady,
   isExternalPaymentGateway,
   getPaymentGateway,
   getPaymentProvider,
@@ -341,4 +388,5 @@ export default {
   getStripeConfig,
   getPaymobConfig,
   getConfigForPaymentMethod,
+  getActivePaymentMethods,
 };

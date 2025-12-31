@@ -1,4 +1,5 @@
 // stripeConfig.model.js
+// ✅ Provider-specific settings ONLY - Activation is in PaymentMethod model
 import mongoose from "mongoose";
 
 const stripeConfigSchema = new mongoose.Schema(
@@ -69,7 +70,7 @@ const stripeConfigSchema = new mongoose.Schema(
       type: Number,
       default: 30,
       min: 1,
-      max: 1440, // 24 hours max
+      max: 1440,
       description: "Minutes before checkout session expires",
     },
     allowPromotionCodes: {
@@ -116,80 +117,27 @@ const stripeConfigSchema = new mongoose.Schema(
       description: "How saved cards can be used in future",
     },
 
-    // ==================== PAYMENT METHOD SETTINGS ====================
-    // Card Payments
-    cardPaymentEnabled: {
-      type: Boolean,
-      default: true,
-      description: "Enable card payments (Visa, Mastercard, Amex, etc.)",
-    },
+    // ==================== STRIPE PAYMENT OPTIONS ====================
+    // These are Stripe-specific sub-options, NOT activation controls
     allowedCardBrands: {
       type: [String],
       default: ["visa", "mastercard", "amex", "discover"],
-      description: "Allowed card brands",
+      description: "Allowed card brands when Card is enabled",
     },
-
-    // Apple Pay
-    applePayEnabled: {
+    enableApplePay: {
       type: Boolean,
       default: false,
-      description: "Enable Apple Pay",
+      description: "Enable Apple Pay in Stripe checkout",
     },
-
-    // Google Pay
-    googlePayEnabled: {
+    enableGooglePay: {
       type: Boolean,
       default: false,
-      description: "Enable Google Pay",
+      description: "Enable Google Pay in Stripe checkout",
     },
-
-    // Link (Stripe's fast checkout)
-    linkEnabled: {
+    enableLink: {
       type: Boolean,
       default: false,
       description: "Enable Stripe Link for fast checkout",
-    },
-
-    // Bank Transfers
-    bankTransferEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable bank transfer payments",
-    },
-
-    // ACH Direct Debit (US)
-    achDebitEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable ACH Direct Debit (US only)",
-    },
-
-    // SEPA Direct Debit (EU)
-    sepaDebitEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable SEPA Direct Debit (EU only)",
-    },
-
-    // iDEAL (Netherlands)
-    idealEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable iDEAL (Netherlands)",
-    },
-
-    // Klarna (BNPL)
-    klarnaEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable Klarna Buy Now Pay Later",
-    },
-
-    // Afterpay/Clearpay (BNPL)
-    afterpayEnabled: {
-      type: Boolean,
-      default: false,
-      description: "Enable Afterpay/Clearpay BNPL",
     },
 
     // ==================== 3D SECURE / AUTHENTICATION ====================
@@ -202,7 +150,7 @@ const stripeConfigSchema = new mongoose.Schema(
       type: String,
       default: "automatic",
       enum: ["automatic", "any", "challenge"],
-      description: "When to request 3DS: automatic (Radar decides), any (if available), challenge (always)",
+      description: "When to request 3DS",
     },
 
     // ==================== CAPTURE SETTINGS ====================
@@ -217,7 +165,7 @@ const stripeConfigSchema = new mongoose.Schema(
       default: 7,
       min: 1,
       max: 7,
-      description: "Days before uncaptured authorization expires (1-7)",
+      description: "Days before uncaptured authorization expires",
     },
 
     // ==================== STATEMENT DESCRIPTOR ====================
@@ -231,7 +179,7 @@ const stripeConfigSchema = new mongoose.Schema(
       type: String,
       default: "",
       maxlength: 22,
-      description: "Statement descriptor suffix for dynamic descriptors",
+      description: "Statement descriptor suffix",
     },
 
     // ==================== RECEIPT SETTINGS ====================
@@ -272,12 +220,12 @@ const stripeConfigSchema = new mongoose.Schema(
     successUrl: {
       type: String,
       default: "",
-      description: "Custom success redirect URL (overrides default)",
+      description: "Custom success redirect URL",
     },
     cancelUrl: {
       type: String,
       default: "",
-      description: "Custom cancel redirect URL (overrides default)",
+      description: "Custom cancel redirect URL",
     },
 
     // ==================== DELIVERY SETTINGS ====================
@@ -301,9 +249,9 @@ const stripeConfigSchema = new mongoose.Schema(
     },
     taxBehavior: {
       type: String,
-      default: "unspecified",
-      enum: ["unspecified", "exclusive", "inclusive"],
-      description: "How tax is applied to prices",
+      default: "exclusive",
+      enum: ["exclusive", "inclusive"],
+      description: "Whether prices include tax",
     },
 
     // ==================== METADATA SETTINGS ====================
@@ -322,6 +270,7 @@ const stripeConfigSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+      description: "Whether Stripe provider is configured and ready",
     },
     isLiveMode: {
       type: Boolean,
@@ -352,49 +301,6 @@ stripeConfigSchema.index({ isActive: 1 });
  */
 stripeConfigSchema.statics.getActiveConfig = async function () {
   return this.findOne({ isActive: true });
-};
-
-/**
- * Check if a payment method is enabled
- */
-stripeConfigSchema.statics.isPaymentMethodEnabled = async function (paymentMethod) {
-  const config = await this.findOne({ isActive: true });
-  if (!config) return true; // No config = allow all
-
-  const enabledMap = {
-    card: config.cardPaymentEnabled,
-    apple_pay: config.applePayEnabled,
-    google_pay: config.googlePayEnabled,
-    link: config.linkEnabled,
-    bank_transfer: config.bankTransferEnabled,
-    us_bank_account: config.achDebitEnabled,
-    sepa_debit: config.sepaDebitEnabled,
-    ideal: config.idealEnabled,
-    klarna: config.klarnaEnabled,
-    afterpay_clearpay: config.afterpayEnabled,
-  };
-
-  return enabledMap[paymentMethod] !== false;
-};
-
-/**
- * Get list of enabled payment method types for Stripe API
- */
-stripeConfigSchema.statics.getEnabledPaymentMethodTypes = async function () {
-  const config = await this.findOne({ isActive: true });
-  if (!config) return ["card"];
-
-  const methods = [];
-
-  if (config.cardPaymentEnabled) methods.push("card");
-  if (config.linkEnabled) methods.push("link");
-  if (config.achDebitEnabled) methods.push("us_bank_account");
-  if (config.sepaDebitEnabled) methods.push("sepa_debit");
-  if (config.idealEnabled) methods.push("ideal");
-  if (config.klarnaEnabled) methods.push("klarna");
-  if (config.afterpayEnabled) methods.push("afterpay_clearpay");
-
-  return methods.length > 0 ? methods : ["card"];
 };
 
 /**
@@ -462,6 +368,23 @@ stripeConfigSchema.statics.canRefundOrder = async function (
 };
 
 /**
+ * Get payment method types for Stripe API
+ * Returns Stripe-specific payment types based on config options
+ */
+stripeConfigSchema.statics.getStripePaymentMethodTypes = async function () {
+  const config = await this.findOne({ isActive: true });
+  if (!config) return ["card"];
+
+  const methods = ["card"]; // Card is always included when Stripe is used
+
+  if (config.enableLink) methods.push("link");
+  if (config.enableApplePay) methods.push("apple_pay");
+  if (config.enableGooglePay) methods.push("google_pay");
+
+  return methods;
+};
+
+/**
  * Get checkout session options based on config
  */
 stripeConfigSchema.statics.getCheckoutSessionOptions = async function (baseOptions = {}) {
@@ -471,7 +394,7 @@ stripeConfigSchema.statics.getCheckoutSessionOptions = async function (baseOptio
   const options = { ...baseOptions };
 
   // Payment method types
-  options.payment_method_types = await this.getEnabledPaymentMethodTypes();
+  options.payment_method_types = await this.getStripePaymentMethodTypes();
 
   // Customer creation
   if (config.createCustomerOnCheckout) {
@@ -516,17 +439,14 @@ stripeConfigSchema.statics.getPaymentIntentOptions = async function (baseOptions
 
   const options = { ...baseOptions };
 
-  // Capture method
   if (config.captureMethod) {
     options.capture_method = config.captureMethod;
   }
 
-  // Setup future usage
   if (config.saveCardForFutureUse && config.setupFutureUsage) {
     options.setup_future_usage = config.setupFutureUsage;
   }
 
-  // Statement descriptor
   if (config.statementDescriptor) {
     options.statement_descriptor = config.statementDescriptor;
   }
@@ -536,28 +456,6 @@ stripeConfigSchema.statics.getPaymentIntentOptions = async function (baseOptions
   }
 
   return options;
-};
-
-// ==================== INSTANCE METHODS ====================
-
-/**
- * Get all enabled payment methods
- */
-stripeConfigSchema.methods.getEnabledPaymentMethods = function () {
-  const methods = [];
-
-  if (this.cardPaymentEnabled) methods.push("Card");
-  if (this.applePayEnabled) methods.push("Apple Pay");
-  if (this.googlePayEnabled) methods.push("Google Pay");
-  if (this.linkEnabled) methods.push("Link");
-  if (this.bankTransferEnabled) methods.push("Bank Transfer");
-  if (this.achDebitEnabled) methods.push("ACH Direct Debit");
-  if (this.sepaDebitEnabled) methods.push("SEPA Direct Debit");
-  if (this.idealEnabled) methods.push("iDEAL");
-  if (this.klarnaEnabled) methods.push("Klarna");
-  if (this.afterpayEnabled) methods.push("Afterpay");
-
-  return methods;
 };
 
 /**
@@ -576,12 +474,14 @@ stripeConfigSchema.methods.getSummary = function () {
       partialAllowed: this.allowPartialRefunds,
       autoRefund: this.autoRefundOnCancellation,
     },
-    enabledMethods: this.getEnabledPaymentMethods(),
     features: {
       guestCheckout: this.allowGuestCheckout,
       saveCards: this.saveCardForFutureUse,
       require3DS: this.require3DSecure,
       automaticTax: this.automaticTax,
+      applePay: this.enableApplePay,
+      googlePay: this.enableGooglePay,
+      link: this.enableLink,
     },
   };
 };

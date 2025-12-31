@@ -1,5 +1,7 @@
 import Cart from "../models/cart.model.js";
 import Product from "../models/product.model.js";
+import Coupon from "../models/coupon.model.js";
+import { calculateFinalCartPrice } from "../helpers/discount.helpers.js";
 
 
 export const addProductToCart = async (req, res) => {
@@ -170,7 +172,7 @@ export const adjustProductQuantity = async (req, res) => {
   try {
     const userId = req.user?._id;
     const { productId } = req.params;
-    const { action } = req.body;
+    const { action, quantity = 1 } = req.body; // Default to 1 if not provided
 
     if (!userId) {
       return res
@@ -182,6 +184,14 @@ export const adjustProductQuantity = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Action must be 'increase' or 'decrease'",
+      });
+    }
+
+    // Validate quantity
+    if (quantity && (!Number.isInteger(quantity) || quantity < 1)) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be a positive integer",
       });
     }
 
@@ -213,26 +223,30 @@ export const adjustProductQuantity = async (req, res) => {
     }
 
     let message = "";
+    const changeAmount = quantity; // Amount to increase/decrease
 
     if (action === 'increase') {
-      existingProduct.quantity += 1;
-      cart.totalQuantity += 1;
-      cart.totalPrice += product.price;
-      message = "Product quantity increased";
+      existingProduct.quantity += changeAmount;
+      cart.totalQuantity += changeAmount;
+      cart.totalPrice += product.price * changeAmount;
+      message = `Product quantity increased by ${changeAmount}`;
     } else if (action === 'decrease') {
-      if (existingProduct.quantity === 1) {
-        // Use $pull to remove the product
+      if (existingProduct.quantity <= changeAmount) {
+        // Remove product if decreasing by more than or equal to current quantity
+        const removedQuantity = existingProduct.quantity;
+        
         await Cart.findByIdAndUpdate(cart._id, {
           $pull: { products: { product: productId } }
         });
-        cart.totalQuantity -= 1;
-        cart.totalPrice -= product.price;
+        
+        cart.totalQuantity -= removedQuantity;
+        cart.totalPrice -= product.price * removedQuantity;
         message = "Product removed from cart";
       } else {
-        existingProduct.quantity -= 1;
-        cart.totalQuantity -= 1;
-        cart.totalPrice -= product.price;
-        message = "Product quantity decreased";
+        existingProduct.quantity -= changeAmount;
+        cart.totalQuantity -= changeAmount;
+        cart.totalPrice -= product.price * changeAmount;
+        message = `Product quantity decreased by ${changeAmount}`;
       }
     }
 
@@ -253,7 +267,6 @@ export const adjustProductQuantity = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 export const removeProductInstanceFromCart = async (req, res) => {
   try {
@@ -521,3 +534,250 @@ export const getCartByUserId = async (req, res) => {
   }
 };
 
+
+
+// ==================== COUPON OPERATIONS ====================
+
+/**
+ * Apply coupon to cart (Customer)
+ * POST /api/v2/cart/apply-coupon
+ */
+export const applyCouponToCart = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+    const { couponCode } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User not authenticated",
+      });
+    }
+
+    if (!couponCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Coupon code is required",
+      });
+    }
+
+    // Find cart
+    const cart = await Cart.findOne({ owner: userId }).populate("products.product");
+    if (!cart || cart.products.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty",
+      });
+    }
+
+    // Find and validate coupon
+    const couponResult = await Coupon.findValidCoupon(couponCode);
+    if (!couponResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.message,
+      });
+    }
+
+    const coupon = couponResult.coupon;
+
+    // Check if user can use this coupon
+    const userCheck = coupon.canUserUse(userId);
+    if (!userCheck.canUse) {
+      return res.status(400).json({
+        success: false,
+        message: userCheck.message,
+      });
+    }
+
+    // Calculate cart with coupon
+    const cartCalculation = await calculateFinalCartPrice(
+      cart.products,
+      coupon._id,
+      userId
+    );
+
+    if (!cartCalculation.appliedCoupon) {
+      return res.status(400).json({
+        success: false,
+        message: "Coupon could not be applied to your cart",
+      });
+    }
+
+    // Update cart
+    cart.appliedCoupon = coupon._id;
+    cart.subtotal = cartCalculation.subtotal;
+    cart.couponDiscount = cartCalculation.couponDiscount;
+    cart.totalDiscount = cartCalculation.totalDiscount;
+    cart.totalPrice = cartCalculation.finalTotal;
+
+    await cart.save();
+    await cart.populate("appliedCoupon");
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        cart,
+        discountBreakdown: {
+          subtotal: cartCalculation.subtotal,
+          productDiscounts: cartCalculation.productDiscounts,
+          couponDiscount: cartCalculation.couponDiscount,
+          totalDiscount: cartCalculation.totalDiscount,
+          finalTotal: cartCalculation.finalTotal,
+          freeDelivery: cartCalculation.freeDelivery,
+        },
+      },
+      message: `Coupon ${coupon.code} applied successfully`,
+    });
+  } catch (error) {
+    console.error("Error in applyCouponToCart:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Remove coupon from cart (Customer)
+ * POST /api/v2/cart/remove-coupon
+ */
+export const removeCouponFromCart = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User not authenticated",
+      });
+    }
+
+    const cart = await Cart.findOne({ owner: userId }).populate("products.product");
+    if (!cart) {
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found",
+      });
+    }
+
+    if (!cart.appliedCoupon) {
+      return res.status(400).json({
+        success: false,
+        message: "No coupon applied to cart",
+      });
+    }
+
+    // Recalculate without coupon
+    const cartCalculation = await calculateFinalCartPrice(cart.products, null, userId);
+
+    cart.appliedCoupon = null;
+    cart.subtotal = cartCalculation.subtotal;
+    cart.couponDiscount = 0;
+    cart.totalDiscount = cartCalculation.productDiscounts;
+    cart.totalPrice = cartCalculation.finalTotal;
+
+    await cart.save();
+
+    return res.status(200).json({
+      success: true,
+      data: cart,
+      message: "Coupon removed successfully",
+    });
+  } catch (error) {
+    console.error("Error in removeCouponFromCart:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * Get cart with detailed discount breakdown (Customer)
+ * GET /api/v2/cart/get-cart-with-discounts
+ */
+export const getCartWithDiscounts = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authenticated",
+      });
+    }
+
+    const cart = await Cart.findOne({ owner: userId })
+      .populate("products.product")
+      .populate("appliedCoupon");
+
+    if (!cart || cart.products.length === 0) {
+      return res.status(200).json({
+        success: true,
+        cart: {
+          _id: null,
+          products: [],
+          totalQuantity: 0,
+          subtotal: 0,
+          totalDiscount: 0,
+          totalPrice: 0,
+          appliedCoupon: null,
+        },
+      });
+    }
+
+    // Recalculate prices with current discounts
+    const cartCalculation = await calculateFinalCartPrice(
+      cart.products,
+      cart.appliedCoupon?._id,
+      userId
+    );
+
+    // Update cart with latest calculations
+    cart.subtotal = cartCalculation.subtotal;
+    cart.couponDiscount = cartCalculation.couponDiscount;
+    cart.totalDiscount = cartCalculation.totalDiscount;
+    cart.totalPrice = cartCalculation.finalTotal;
+    await cart.save();
+
+    return res.status(200).json({
+      success: true,
+      cart: {
+        _id: cart._id,
+        products: cartCalculation.itemsWithPrices.map(item => ({
+          product: item.product,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          originalUnitPrice: item.originalUnitPrice,
+          unitDiscount: item.unitDiscount,
+          itemTotal: item.itemTotal,
+          itemDiscount: item.itemDiscount,
+          discountType: item.discountType,
+          discountPercentage: item.discountPercentage,
+        })),
+        totalQuantity: cart.totalQuantity,
+        subtotal: cartCalculation.subtotal,
+        productDiscounts: cartCalculation.productDiscounts,
+        couponDiscount: cartCalculation.couponDiscount,
+        totalDiscount: cartCalculation.totalDiscount,
+        totalPrice: cartCalculation.finalTotal,
+        appliedCoupon: cart.appliedCoupon ? {
+          _id: cart.appliedCoupon._id,
+          code: cart.appliedCoupon.code,
+          description: cart.appliedCoupon.description,
+          discountType: cart.appliedCoupon.discountType,
+          discountValue: cart.appliedCoupon.discountValue,
+        } : null,
+        freeDelivery: cartCalculation.freeDelivery,
+      },
+      message: "Cart fetched successfully",
+    });
+  } catch (error) {
+    console.error("getCartWithDiscounts error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};

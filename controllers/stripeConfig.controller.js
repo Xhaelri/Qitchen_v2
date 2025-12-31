@@ -1,3 +1,7 @@
+// stripeConfig.controller.js
+// ✅ Stripe provider-specific settings ONLY
+// ❌ Payment method activation is via PaymentMethod.isActive (NOT here)
+
 import StripeConfig from "../models/stripeConfig.model.js";
 import Stripe from "stripe";
 import "dotenv/config";
@@ -8,7 +12,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 /**
  * Get active Stripe configuration
- * GET /api/v2/admin/stripe-config
+ * GET /api/v2/stripe-config
  */
 export const getStripeConfig = async (req, res) => {
   try {
@@ -41,13 +45,13 @@ export const getStripeConfig = async (req, res) => {
 
 /**
  * Update Stripe configuration
- * PUT /api/v2/admin/stripe-config
+ * PATCH /api/v2/stripe-config
  */
 export const updateStripeConfig = async (req, res) => {
   try {
     const updates = req.body;
 
-    // Fields that can be updated
+    // ✅ Provider-specific settings ONLY
     const allowedFields = [
       // Order amount settings
       "minOrderAmount",
@@ -76,18 +80,11 @@ export const updateStripeConfig = async (req, res) => {
       "saveCardForFutureUse",
       "setupFutureUsage",
 
-      // Payment method settings
-      "cardPaymentEnabled",
+      // Stripe checkout sub-options (these are Stripe-specific features, NOT main activation)
       "allowedCardBrands",
-      "applePayEnabled",
-      "googlePayEnabled",
-      "linkEnabled",
-      "bankTransferEnabled",
-      "achDebitEnabled",
-      "sepaDebitEnabled",
-      "idealEnabled",
-      "klarnaEnabled",
-      "afterpayEnabled",
+      "enableApplePay",
+      "enableGooglePay",
+      "enableLink",
 
       // 3D Secure settings
       "require3DSecure",
@@ -150,7 +147,10 @@ export const updateStripeConfig = async (req, res) => {
     }
 
     // Validate statement descriptor length
-    if (filteredUpdates.statementDescriptor && filteredUpdates.statementDescriptor.length > 22) {
+    if (
+      filteredUpdates.statementDescriptor &&
+      filteredUpdates.statementDescriptor.length > 22
+    ) {
       return res.status(400).json({
         success: false,
         message: "Statement descriptor cannot exceed 22 characters",
@@ -188,263 +188,14 @@ export const updateStripeConfig = async (req, res) => {
   }
 };
 
-// ==================== GET ENABLED PAYMENT METHODS ====================
-
-/**
- * Get list of enabled Stripe payment methods
- * GET /api/v2/admin/stripe-config/payment-methods
- */
-export const getEnabledPaymentMethods = async (req, res) => {
-  try {
-    const config = await StripeConfig.findOne({ isActive: true });
-
-    if (!config) {
-      return res.status(200).json({
-        success: true,
-        data: ["Card"],
-        apiTypes: ["card"],
-        message: "Using default payment methods",
-      });
-    }
-
-    const enabledMethods = config.getEnabledPaymentMethods();
-    const apiTypes = await StripeConfig.getEnabledPaymentMethodTypes();
-
-    return res.status(200).json({
-      success: true,
-      data: enabledMethods,
-      apiTypes,
-      message: "Enabled payment methods fetched successfully",
-    });
-  } catch (error) {
-    console.error("Error fetching enabled payment methods:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-// ==================== TOGGLE PAYMENT METHOD ====================
-
-/**
- * Toggle a specific payment method on/off
- * PATCH /api/v2/admin/stripe-config/payment-method/:method
- */
-export const togglePaymentMethod = async (req, res) => {
-  try {
-    const { method } = req.params;
-    const { enabled } = req.body;
-
-    const methodFieldMap = {
-      card: "cardPaymentEnabled",
-      apple_pay: "applePayEnabled",
-      google_pay: "googlePayEnabled",
-      link: "linkEnabled",
-      bank_transfer: "bankTransferEnabled",
-      ach_debit: "achDebitEnabled",
-      sepa_debit: "sepaDebitEnabled",
-      ideal: "idealEnabled",
-      klarna: "klarnaEnabled",
-      afterpay: "afterpayEnabled",
-    };
-
-    const field = methodFieldMap[method];
-
-    if (!field) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid payment method: ${method}. Valid methods: ${Object.keys(methodFieldMap).join(", ")}`,
-      });
-    }
-
-    let config = await StripeConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await StripeConfig.create({ isActive: true });
-    }
-
-    config[field] = enabled !== undefined ? enabled : !config[field];
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        method,
-        enabled: config[field],
-      },
-      message: `${method} ${config[field] ? "enabled" : "disabled"} successfully`,
-    });
-  } catch (error) {
-    console.error("Error toggling payment method:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-// ==================== UPDATE REFUND SETTINGS ====================
-
-/**
- * Update refund settings
- * PUT /api/v2/admin/stripe-config/refund-settings
- */
-export const updateRefundSettings = async (req, res) => {
-  try {
-    const { refundWindowHours, allowPartialRefunds, autoRefundOnCancellation, refundReasons } =
-      req.body;
-
-    let config = await StripeConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await StripeConfig.create({ isActive: true });
-    }
-
-    if (refundWindowHours !== undefined) config.refundWindowHours = refundWindowHours;
-    if (allowPartialRefunds !== undefined) config.allowPartialRefunds = allowPartialRefunds;
-    if (autoRefundOnCancellation !== undefined)
-      config.autoRefundOnCancellation = autoRefundOnCancellation;
-    if (refundReasons !== undefined) config.refundReasons = refundReasons;
-
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        refundWindowHours: config.refundWindowHours,
-        allowPartialRefunds: config.allowPartialRefunds,
-        autoRefundOnCancellation: config.autoRefundOnCancellation,
-        refundReasons: config.refundReasons,
-      },
-      message: "Refund settings updated successfully",
-    });
-  } catch (error) {
-    console.error("Error updating refund settings:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-// ==================== UPDATE CHECKOUT SETTINGS ====================
-
-/**
- * Update checkout settings
- * PUT /api/v2/admin/stripe-config/checkout-settings
- */
-export const updateCheckoutSettings = async (req, res) => {
-  try {
-    const {
-      checkoutMode,
-      useStripeCheckout,
-      checkoutExpirationMinutes,
-      allowPromotionCodes,
-      collectBillingAddress,
-      collectShippingAddress,
-      collectPhoneNumber,
-      successUrl,
-      cancelUrl,
-    } = req.body;
-
-    let config = await StripeConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await StripeConfig.create({ isActive: true });
-    }
-
-    if (checkoutMode !== undefined) config.checkoutMode = checkoutMode;
-    if (useStripeCheckout !== undefined) config.useStripeCheckout = useStripeCheckout;
-    if (checkoutExpirationMinutes !== undefined)
-      config.checkoutExpirationMinutes = checkoutExpirationMinutes;
-    if (allowPromotionCodes !== undefined) config.allowPromotionCodes = allowPromotionCodes;
-    if (collectBillingAddress !== undefined) config.collectBillingAddress = collectBillingAddress;
-    if (collectShippingAddress !== undefined)
-      config.collectShippingAddress = collectShippingAddress;
-    if (collectPhoneNumber !== undefined) config.collectPhoneNumber = collectPhoneNumber;
-    if (successUrl !== undefined) config.successUrl = successUrl;
-    if (cancelUrl !== undefined) config.cancelUrl = cancelUrl;
-
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        checkoutMode: config.checkoutMode,
-        useStripeCheckout: config.useStripeCheckout,
-        checkoutExpirationMinutes: config.checkoutExpirationMinutes,
-        allowPromotionCodes: config.allowPromotionCodes,
-        collectBillingAddress: config.collectBillingAddress,
-        collectShippingAddress: config.collectShippingAddress,
-        collectPhoneNumber: config.collectPhoneNumber,
-        successUrl: config.successUrl,
-        cancelUrl: config.cancelUrl,
-      },
-      message: "Checkout settings updated successfully",
-    });
-  } catch (error) {
-    console.error("Error updating checkout settings:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-// ==================== UPDATE SECURITY SETTINGS ====================
-
-/**
- * Update security settings (3DS, capture method)
- * PUT /api/v2/admin/stripe-config/security-settings
- */
-export const updateSecuritySettings = async (req, res) => {
-  try {
-    const { require3DSecure, radar3DSRequestType, captureMethod, authorizationValidDays } =
-      req.body;
-
-    let config = await StripeConfig.findOne({ isActive: true });
-
-    if (!config) {
-      config = await StripeConfig.create({ isActive: true });
-    }
-
-    if (require3DSecure !== undefined) config.require3DSecure = require3DSecure;
-    if (radar3DSRequestType !== undefined) config.radar3DSRequestType = radar3DSRequestType;
-    if (captureMethod !== undefined) config.captureMethod = captureMethod;
-    if (authorizationValidDays !== undefined)
-      config.authorizationValidDays = authorizationValidDays;
-
-    await config.save();
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        require3DSecure: config.require3DSecure,
-        radar3DSRequestType: config.radar3DSRequestType,
-        captureMethod: config.captureMethod,
-        authorizationValidDays: config.authorizationValidDays,
-      },
-      message: "Security settings updated successfully",
-    });
-  } catch (error) {
-    console.error("Error updating security settings:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
 // ==================== VERIFY STRIPE CONNECTION ====================
 
 /**
  * Verify Stripe API connection and get account info
- * GET /api/v2/admin/stripe-config/verify
+ * GET /api/v2/stripe-config/verify
  */
 export const verifyStripeConnection = async (req, res) => {
   try {
-    // Attempt to retrieve account info
     const account = await stripe.accounts.retrieve();
 
     let config = await StripeConfig.findOne({ isActive: true });
@@ -486,7 +237,7 @@ export const verifyStripeConnection = async (req, res) => {
 
 /**
  * Get Stripe account balance
- * GET /api/v2/admin/stripe-config/balance
+ * GET /api/v2/stripe-config/balance
  */
 export const getStripeBalance = async (req, res) => {
   try {
@@ -520,14 +271,12 @@ export const getStripeBalance = async (req, res) => {
 
 /**
  * Reset Stripe configuration to defaults
- * POST /api/v2/admin/stripe-config/reset
+ * POST /api/v2/stripe-config/reset
  */
 export const resetStripeConfig = async (req, res) => {
   try {
-    // Delete existing config
     await StripeConfig.deleteMany({});
 
-    // Create new default config
     const config = await StripeConfig.create({
       isActive: true,
       isLiveMode: !process.env.STRIPE_SECRET_KEY?.includes("test"),
@@ -552,18 +301,17 @@ export const resetStripeConfig = async (req, res) => {
 
 /**
  * Get webhook configuration info
- * GET /api/v2/admin/stripe-config/webhooks
+ * GET /api/v2/stripe-config/webhooks
  */
 export const getWebhookInfo = async (req, res) => {
   try {
     const config = await StripeConfig.findOne({ isActive: true });
-
     const baseUrl = process.env.BASE_URL || process.env.API_URL;
 
     return res.status(200).json({
       success: true,
       data: {
-        webhookUrl: `${baseUrl}/api/v2/stripe/webhook`,
+        webhookUrl: `${baseUrl}/api/v2/webhooks/stripe`,
         secretConfigured: !!process.env.STRIPE_WEBHOOK_SECRET,
         enabledEvents: config?.webhookEvents || [
           "checkout.session.completed",
@@ -599,11 +347,6 @@ export const getWebhookInfo = async (req, res) => {
 export default {
   getStripeConfig,
   updateStripeConfig,
-  getEnabledPaymentMethods,
-  togglePaymentMethod,
-  updateRefundSettings,
-  updateCheckoutSettings,
-  updateSecuritySettings,
   verifyStripeConnection,
   getStripeBalance,
   resetStripeConfig,

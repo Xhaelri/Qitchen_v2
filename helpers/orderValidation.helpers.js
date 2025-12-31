@@ -1,8 +1,7 @@
+// orderValidation.helpers.js
 import Cart from "../models/cart.model.js";
 import Product from "../models/product.model.js";
-import {
-  validateInPlaceOrder,
-} from "./reservation.helpers.js";
+import { validateInPlaceOrder } from "./reservation.helpers.js";
 import {
   calculateDeliveryFee,
   validatePaymentMethod,
@@ -68,7 +67,7 @@ export const validateCommonOrderFields = async ({
     };
   }
 
-  // Validate payment method is active
+  // ✅ Validate payment method - uses PaymentMethod.isActive as single source
   const paymentValidation = await validatePaymentMethod(paymentMethod);
   if (!paymentValidation.success) {
     return {
@@ -142,10 +141,11 @@ export const calculateDeliveryFeeSafe = async ({
 /**
  * Validate order amount
  * @param {number} totalPrice
+ * @param {string} paymentMethod - Optional payment method for provider-specific limits
  * @returns {Promise<ValidationResult>}
  */
-export const validateOrderAmountSafe = async (totalPrice) => {
-  const amountValidation = await validateOrderAmount(totalPrice);
+export const validateOrderAmountSafe = async (totalPrice, paymentMethod = null) => {
+  const amountValidation = await validateOrderAmount(totalPrice, paymentMethod);
   if (!amountValidation.success) {
     return {
       success: false,
@@ -171,7 +171,7 @@ export const validateAndGetCart = async (cartId) => {
   }
 
   const cart = await Cart.findById(cartId).populate("products.product");
-  
+
   if (!cart) {
     return {
       success: false,
@@ -215,7 +215,7 @@ export const validateAndGetProduct = async (productId, quantity) => {
   }
 
   const product = await Product.findById(productId);
-  
+
   if (!product) {
     return {
       success: false,
@@ -265,7 +265,7 @@ export const validateAndEnrichProducts = async (products) => {
 
         return {
           product: product._id,
-          productData: product, // Keep full product data for payment processing
+          productData: product,
           quantity: item.quantity,
         };
       })
@@ -312,7 +312,7 @@ export const validateOrderRequest = async ({
     };
   }
 
-  // Validate common fields
+  // Validate common fields (includes payment method validation)
   const commonValidation = await validateCommonOrderFields({
     userId,
     placeType,
