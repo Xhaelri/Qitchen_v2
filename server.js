@@ -1,3 +1,11 @@
+// Test
+import http from "http";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { Server } from 'socket.io';
+
+//
+
 import { applySecurity } from "./middleware/security.middleware.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.middlware.js";
 
@@ -20,14 +28,32 @@ import { router as homeRouter } from "./routes/home.route.js";
 import { router as couponRouter } from "./routes/coupon.route.js";
 import { router as globalDiscountRouter } from "./routes/globalDiscount.route.js";
 
-
 import { router as paymentMethodRouter } from "./routes/paymentMethod.route.js";
 import { router as paymobConfigRouter } from "./routes/paymobConfig.route.js";
 import { router as stripeConfigRouter } from "./routes/stripeConfig.route.js";
 import { router as webhookRouter } from "./routes/webhook.route.js";
 
 const app = express();
+const server = http.createServer(app);
 
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
+// Make io accessible via app
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+  
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
 
 // Paymob and stripe webhook route
 app.use("/api/v2/webhook", webhookRouter);
@@ -63,13 +89,11 @@ app.use(errorHandler);
 
 connectDB();
 
-// For local development
-if (process.env.NODE_ENV !== 'production') {
   const port = process.env.PORT || 4000;
-  app.listen(port, () => {
+  server.listen(port, () => {  // Use server.listen, not app.listen ✓
     console.log(`Server is running on http://localhost:${port}`);
   });
-}
 
-// For Vercel
+
+export { io };
 export default app;
